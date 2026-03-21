@@ -16,6 +16,9 @@ class DSQLDialect(Postgres):
         TRANSFORMS = {
             **Postgres.Generator.TRANSFORMS,
             exp.Rand: lambda self, expression: self.func("RAND"),
+            exp.StrPosition: lambda self, expression: self.func(
+                "INSTR", expression.this, expression.args["substr"]
+            ),
         }
 
         def identifier_sql(self, expression: exp.Identifier) -> str:
