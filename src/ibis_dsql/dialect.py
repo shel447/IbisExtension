@@ -7,6 +7,7 @@ from sqlglot.dialects.postgres import Postgres
 class DSQLDialect(Postgres):
     class Generator(Postgres.Generator):
         IDENTIFY = False
+        SINGLE_STRING_INTERVAL = False
         TYPE_MAPPING = {
             **Postgres.Generator.TYPE_MAPPING,
             exp.DataType.Type.TEXT: "STRING",

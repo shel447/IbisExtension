@@ -94,6 +94,20 @@ def test_to_sql_preserves_count_star_alias():
     assert sql == "SELECT COUNT(*) AS total FROM users AS t0"
 
 
+def test_to_sql_formats_interval_with_separate_unit():
+    users = ibis.table([("id", "int64")], name="users")
+    expr = users.select(
+        (ibis.timestamp("2024-01-01 00:00:00") + ibis.interval(days=1)).name("x")
+    )
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT CAST('2024-01-01T00:00:00' AS TIMESTAMP) + INTERVAL '1' DAY AS x FROM users AS t0"
+    )
+
+
 def test_compile_optimize_reparses_compiled_sql():
     users = ibis.table([("id", "int64")], name="users")
     expr = users.filter(ibis.literal(True) & (users.id > 1))
