@@ -38,3 +38,23 @@ class DSQLDialect(Postgres):
                 text = f"{self._identifier_start}{text}{self._identifier_end}"
 
             return text
+
+        def not_sql(self, expression: exp.Not) -> str:
+            target = expression.this
+
+            if isinstance(target, exp.Paren):
+                target = target.this
+
+            if isinstance(target, exp.In):
+                return self.in_sql(target).replace(" IN ", " NOT IN ", 1)
+
+            if isinstance(target, exp.Like):
+                return (
+                    f"{self.sql(target, 'this')} NOT LIKE "
+                    f"{self.sql(target, 'expression')}"
+                )
+
+            if isinstance(target, exp.Is) and isinstance(target.expression, exp.Null):
+                return f"{self.sql(target, 'this')} IS NOT NULL"
+
+            return super().not_sql(expression)

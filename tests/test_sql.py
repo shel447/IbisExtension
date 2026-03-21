@@ -117,6 +117,46 @@ def test_to_sql_rewrites_position_to_instr():
     assert sql == "SELECT INSTR(t0.name, 'abc') - 1 AS pos FROM users AS t0"
 
 
+def test_to_sql_rewrites_not_in_to_postfix_not():
+    users = ibis.table([("id", "int64")], name="users")
+    expr = users.filter(~users.id.isin([1, 2]))
+
+    sql = to_sql(expr)
+
+    assert sql == "SELECT * FROM users AS t0 WHERE t0.id NOT IN (1, 2)"
+
+
+def test_to_sql_rewrites_not_like_to_postfix_not():
+    users = ibis.table([("name", "string")], name="users")
+    expr = users.filter(~users.name.like("%x%"))
+
+    sql = to_sql(expr)
+
+    assert sql == "SELECT * FROM users AS t0 WHERE t0.name NOT LIKE '%x%'"
+
+
+def test_to_sql_rewrites_not_is_null_to_is_not_null():
+    users = ibis.table([("name", "string")], name="users")
+    expr = users.filter(~users.name.isnull())
+
+    sql = to_sql(expr)
+
+    assert sql == "SELECT * FROM users AS t0 WHERE t0.name IS NOT NULL"
+
+
+def test_to_sql_rewrites_not_in_subquery_to_postfix_not():
+    users = ibis.table([("id", "int64")], name="users")
+    rel = users.filter(users.id > 1)
+    expr = users.filter(~users.id.isin(rel.id))
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT * FROM users AS t0 WHERE t0.id NOT IN (SELECT * FROM users AS t0 WHERE t0.id > 1)"
+    )
+
+
 def test_compile_optimize_reparses_compiled_sql():
     users = ibis.table([("id", "int64")], name="users")
     expr = users.filter(ibis.literal(True) & (users.id > 1))
