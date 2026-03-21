@@ -31,6 +31,15 @@ def test_to_sql_rewrites_startswith_literal_to_like():
     assert sql == "SELECT * FROM users AS t0 WHERE t0.name LIKE 'ab%'"
 
 
+def test_to_sql_rewrites_endswith_literal_to_like():
+    users = ibis.table([("name", "string")], name="users")
+    expr = users.filter(users.name.endswith("yz"))
+
+    sql = to_sql(expr)
+
+    assert sql == "SELECT * FROM users AS t0 WHERE t0.name LIKE '%yz'"
+
+
 def test_to_sql_supports_group_filter_queries():
     users = ibis.table([("name", "string"), ("score", "int64")], name="users")
     expr = (

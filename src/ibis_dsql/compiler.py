@@ -22,3 +22,11 @@ class DSQLCompiler(PostgresCompiler):
             )
 
         return sge.Like(this=arg, expression=sge.Literal.string(f"{start.this}%"))
+
+    def visit_EndsWith(self, op, *, arg, end):
+        if not isinstance(end, sge.Literal) or not end.is_string:
+            raise com.UnsupportedOperationError(
+                "DSQL does not support dynamic endswith patterns"
+            )
+
+        return sge.Like(this=arg, expression=sge.Literal.string(f"%{end.this}"))
