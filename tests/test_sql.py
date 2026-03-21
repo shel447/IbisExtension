@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ibis
+import ibis.common.exceptions as com
+import pytest
 from ibis.backends.sql.compilers.postgres import PostgresCompiler
 
 from ibis_dsql import compile as compile_expr
@@ -163,6 +165,30 @@ def test_to_sql_expands_top_level_star_selection():
     sql = to_sql(users)
 
     assert sql == "SELECT users.id, users.name FROM users"
+
+
+def test_to_sql_rejects_scalar_subquery_in_where_clause():
+    users = ibis.table([("id", "int64"), ("name", "string")], name="users")
+    scalar = users.aggregate(mx=users.id.max()).mx.as_scalar()
+    expr = users.filter(users.id > scalar)
+
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support scalar subqueries",
+    ):
+        to_sql(expr)
+
+
+def test_to_sql_rejects_scalar_subquery_in_select_list():
+    users = ibis.table([("id", "int64"), ("name", "string")], name="users")
+    scalar = users.aggregate(mx=users.id.max()).mx.as_scalar()
+    expr = users.select(mx=scalar)
+
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support scalar subqueries",
+    ):
+        to_sql(expr)
 
 
 def test_to_sql_uses_dsql_float_type_names():

@@ -32,6 +32,11 @@ class DSQLCompiler(PostgresCompiler):
 
         return sge.Like(this=arg, expression=sge.Literal.string(f"%{end.this}"))
 
+    def visit_ScalarSubquery(self, op, *, rel):
+        raise com.UnsupportedOperationError(
+            "DSQL does not support scalar subqueries"
+        )
+
     def _star_fields(self, names, relation):
         table = getattr(relation, "alias_or_name", None)
 
