@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ibis.common.exceptions as com
 from ibis.backends.sql.compilers.postgres import PostgresCompiler
+import sqlglot as sg
 import sqlglot.expressions as sge
 
 from ibis_dsql.dialect import DSQLDialect
@@ -30,3 +31,55 @@ class DSQLCompiler(PostgresCompiler):
             )
 
         return sge.Like(this=arg, expression=sge.Literal.string(f"%{end.this}"))
+
+    def _star_fields(self, names, relation):
+        table = getattr(relation, "alias_or_name", None)
+
+        if not table and isinstance(relation, sge.Select):
+            source = relation.args.get("from_")
+            source = None if source is None else source.this
+            table = getattr(source, "alias_or_name", None)
+
+        return [
+            sg.column(name, table=table or None, quoted=self.quoted, copy=False)
+            for name in names
+        ]
+
+    def to_sqlglot(self, expr, *, limit=None, params=None):
+        sql = super().to_sqlglot(expr, limit=limit, params=params)
+
+        if isinstance(sql, sge.Select):
+            expressions = sql.args.get("expressions") or []
+            if len(expressions) == 1 and isinstance(expressions[0], sge.Star):
+                sql.set("expressions", self._star_fields(expr.as_table().schema().names, sql))
+
+        return sql
+
+    def visit_Select(
+        self, op, *, parent, selections, predicates, qualified, sort_keys, distinct
+    ):
+        if not (selections or predicates or qualified or sort_keys or distinct):
+            return parent
+
+        result = parent
+
+        if selections:
+            if op.is_star_selection():
+                fields = self._star_fields(op.schema.names, parent)
+            else:
+                fields = self._cleanup_names(selections)
+            result = sg.select(*fields, copy=False).from_(result, copy=False)
+
+        if predicates:
+            result = result.where(*predicates, copy=False)
+
+        if qualified:
+            result = result.qualify(*qualified, copy=False)
+
+        if sort_keys:
+            result = result.order_by(*sort_keys, copy=False)
+
+        if distinct:
+            result = result.distinct()
+
+        return result

@@ -18,7 +18,7 @@ def test_to_sql_supports_order_limit_queries():
 
     assert (
         sql
-        == "SELECT * FROM users AS t0 WHERE t0.score > 0 ORDER BY t0.name DESC NULLS LAST LIMIT 5"
+        == "SELECT t0.id, t0.name, t0.score FROM users AS t0 WHERE t0.score > 0 ORDER BY t0.name DESC NULLS LAST LIMIT 5"
     )
 
 
@@ -28,7 +28,7 @@ def test_to_sql_rewrites_startswith_literal_to_like():
 
     sql = to_sql(expr)
 
-    assert sql == "SELECT * FROM users AS t0 WHERE t0.name LIKE 'ab%'"
+    assert sql == "SELECT t0.name FROM users AS t0 WHERE t0.name LIKE 'ab%'"
 
 
 def test_to_sql_rewrites_endswith_literal_to_like():
@@ -37,7 +37,7 @@ def test_to_sql_rewrites_endswith_literal_to_like():
 
     sql = to_sql(expr)
 
-    assert sql == "SELECT * FROM users AS t0 WHERE t0.name LIKE '%yz'"
+    assert sql == "SELECT t0.name FROM users AS t0 WHERE t0.name LIKE '%yz'"
 
 
 def test_to_sql_supports_group_filter_queries():
@@ -52,7 +52,7 @@ def test_to_sql_supports_group_filter_queries():
 
     assert (
         sql
-        == "SELECT * FROM (SELECT t0.name, SUM(t0.score) AS total FROM users AS t0 GROUP BY 1) AS t1 WHERE t1.total > 10"
+        == "SELECT t1.name, t1.total FROM (SELECT t0.name, SUM(t0.score) AS total FROM users AS t0 GROUP BY 1) AS t1 WHERE t1.total > 10"
     )
 
 
@@ -81,7 +81,7 @@ def test_to_sql_emits_cte_for_reused_relations():
 
     assert (
         sql
-        == "WITH t1 AS (SELECT * FROM users AS t0 WHERE t0.score > 5) SELECT t3.id, t3.score AS left_score, t4.score AS right_score FROM t1 AS t3 INNER JOIN t1 AS t4 ON t3.id = t4.id"
+        == "WITH t1 AS (SELECT t0.id, t0.score FROM users AS t0 WHERE t0.score > 5) SELECT t3.id, t3.score AS left_score, t4.score AS right_score FROM t1 AS t3 INNER JOIN t1 AS t4 ON t3.id = t4.id"
     )
 
 
@@ -123,7 +123,7 @@ def test_to_sql_rewrites_not_in_to_postfix_not():
 
     sql = to_sql(expr)
 
-    assert sql == "SELECT * FROM users AS t0 WHERE t0.id NOT IN (1, 2)"
+    assert sql == "SELECT t0.id FROM users AS t0 WHERE t0.id NOT IN (1, 2)"
 
 
 def test_to_sql_rewrites_not_like_to_postfix_not():
@@ -132,7 +132,7 @@ def test_to_sql_rewrites_not_like_to_postfix_not():
 
     sql = to_sql(expr)
 
-    assert sql == "SELECT * FROM users AS t0 WHERE t0.name NOT LIKE '%x%'"
+    assert sql == "SELECT t0.name FROM users AS t0 WHERE t0.name NOT LIKE '%x%'"
 
 
 def test_to_sql_rewrites_not_is_null_to_is_not_null():
@@ -141,7 +141,7 @@ def test_to_sql_rewrites_not_is_null_to_is_not_null():
 
     sql = to_sql(expr)
 
-    assert sql == "SELECT * FROM users AS t0 WHERE t0.name IS NOT NULL"
+    assert sql == "SELECT t0.name FROM users AS t0 WHERE t0.name IS NOT NULL"
 
 
 def test_to_sql_rewrites_not_in_subquery_to_postfix_not():
@@ -153,8 +153,16 @@ def test_to_sql_rewrites_not_in_subquery_to_postfix_not():
 
     assert (
         sql
-        == "SELECT * FROM users AS t0 WHERE t0.id NOT IN (SELECT * FROM users AS t0 WHERE t0.id > 1)"
+        == "SELECT t0.id FROM users AS t0 WHERE t0.id NOT IN (SELECT t0.id FROM users AS t0 WHERE t0.id > 1)"
     )
+
+
+def test_to_sql_expands_top_level_star_selection():
+    users = ibis.table([("id", "int64"), ("name", "string")], name="users")
+
+    sql = to_sql(users)
+
+    assert sql == "SELECT users.id, users.name FROM users"
 
 
 def test_to_sql_uses_dsql_float_type_names():
