@@ -85,6 +85,15 @@ def test_to_sql_emits_cte_for_reused_relations():
     )
 
 
+def test_to_sql_preserves_count_star_alias():
+    users = ibis.table([("id", "int64")], name="users")
+    expr = users.aggregate(total=users.count())
+
+    sql = to_sql(expr)
+
+    assert sql == "SELECT COUNT(*) AS total FROM users AS t0"
+
+
 def test_compile_optimize_reparses_compiled_sql():
     users = ibis.table([("id", "int64")], name="users")
     expr = users.filter(ibis.literal(True) & (users.id > 1))
