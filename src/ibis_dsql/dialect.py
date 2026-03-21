@@ -10,6 +10,8 @@ class DSQLDialect(Postgres):
         SINGLE_STRING_INTERVAL = False
         TYPE_MAPPING = {
             **Postgres.Generator.TYPE_MAPPING,
+            exp.DataType.Type.FLOAT: "FLOAT",
+            exp.DataType.Type.DOUBLE: "DOUBLE",
             exp.DataType.Type.TEXT: "STRING",
             exp.DataType.Type.VARCHAR: "STRING",
         }

@@ -157,6 +157,21 @@ def test_to_sql_rewrites_not_in_subquery_to_postfix_not():
     )
 
 
+def test_to_sql_uses_dsql_float_type_names():
+    users = ibis.table([("id", "int64")], name="users")
+    expr = users.select(
+        users.id.cast("float32").name("f32"),
+        users.id.cast("float64").name("f64"),
+    )
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT CAST(t0.id AS FLOAT) AS f32, CAST(t0.id AS DOUBLE) AS f64 FROM users AS t0"
+    )
+
+
 def test_compile_optimize_reparses_compiled_sql():
     users = ibis.table([("id", "int64")], name="users")
     expr = users.filter(ibis.literal(True) & (users.id > 1))
