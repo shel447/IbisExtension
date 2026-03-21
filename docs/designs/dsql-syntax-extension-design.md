@@ -16,20 +16,20 @@
 
 ### 2.2 本次新增或调整能力
 
-| 编号 | 项目 | 目标状态 | 扩展层 | 说明 |
+| 编号 | 项目 | 当前状态 | 扩展层 | 说明 |
 | --- | --- | --- | --- | --- |
-| N-01 | `startsWith` 字面量前缀匹配 | 新增 | Compiler | 输出 `LIKE 'x%'` |
-| N-02 | `endsWith` 字面量后缀匹配 | 新增 | Compiler | 输出 `LIKE '%x'` |
-| N-03 | `count(*)` 别名保留 | 回归验证 | Compiler | 当前基线已支持，增加测试锁定行为 |
-| N-04 | `INTERVAL '1 DAY'` 改写为 `INTERVAL '1' DAY` | 新增 | Generator | 调整 `SINGLE_STRING_INTERVAL` 策略 |
-| N-05 | `POSITION(x IN y)` 改写为 `INSTR(y, x)` | 新增 | Generator | 保持 Ibis `find()` 的 0 基语义 |
-| N-06 | `NOT (a IN b)` 改写为 `a NOT IN b` | 新增 | Generator | 兼容 `b` 为子查询 |
-| N-07 | `NOT (a LIKE b)` 改写为 `a NOT LIKE b` | 新增 | Generator | 仅改写 `LIKE` 形态 |
-| N-08 | `NOT (a IS NULL)` 改写为 `a IS NOT NULL` | 新增 | Generator | 与已有 `notnull()` 输出保持一致 |
-| N-09 | `SELECT *` 展开为显式列清单 | 新增 | Compiler | 包括顶层表表达式与星号投影场景 |
-| N-10 | `REAL` 输出为 `FLOAT` | 新增 | Generator | DSQL 类型映射 |
-| N-11 | `DOUBLE PRECISION` 输出为 `DOUBLE` | 新增 | Generator | DSQL 类型映射 |
-| N-12 | 禁止所有标量子查询 | 新增 | Compiler | 在任何需要单值的位置统一报错 |
+| N-01 | `startsWith` 字面量前缀匹配 | 已实现 | Compiler | 输出 `LIKE 'x%'` |
+| N-02 | `endsWith` 字面量后缀匹配 | 已实现 | Compiler | 输出 `LIKE '%x'` |
+| N-03 | `count(*)` 别名保留 | 已锁定 | Compiler | 基线已支持，已通过回归测试锁定行为 |
+| N-04 | `INTERVAL '1 DAY'` 改写为 `INTERVAL '1' DAY` | 已实现 | Generator | 通过 `SINGLE_STRING_INTERVAL=False` 生效 |
+| N-05 | `POSITION(x IN y)` 改写为 `INSTR(y, x)` | 已实现 | Generator | 保持 Ibis `find()` 的 0 基语义 |
+| N-06 | `NOT (a IN b)` 改写为 `a NOT IN b` | 已实现 | Generator | 兼容右侧为子查询 |
+| N-07 | `NOT (a LIKE b)` 改写为 `a NOT LIKE b` | 已实现 | Generator | 仅改写 `LIKE` 形态 |
+| N-08 | `NOT (a IS NULL)` 改写为 `a IS NOT NULL` | 已实现 | Generator | 与已有 `notnull()` 输出保持一致 |
+| N-09 | `SELECT *` 展开为显式列清单 | 已实现 | Compiler | 包括顶层表表达式与星号投影场景 |
+| N-10 | `REAL` 输出为 `FLOAT` | 已实现 | Generator | DSQL 类型映射 |
+| N-11 | `DOUBLE PRECISION` 输出为 `DOUBLE` | 已实现 | Generator | DSQL 类型映射 |
+| N-12 | 禁止所有标量子查询 | 已实现 | Compiler | 在任何需要单值的位置统一报错 |
 
 ### 2.3 待完成项
 
@@ -99,7 +99,7 @@
 
 - 在 `DSQLCompiler` 中覆写对应的 `visit_*` 逻辑，直接返回 sqlglot 的 `Like` 表达式。
 - 对字面量参数，直接在 Compiler 中构造最终模式串字面量，不进入 `CONCAT` 或其它字符串拼接路径。
-- 动态前后缀场景不在本次实现范围内；若在编译阶段识别到动态表达式，则保持当前基线行为或在后续版本中再补专门策略。该点在设计文档中标记为待完成，不在本轮承诺交付。
+- 动态前后缀场景不在本次实现范围内；当前实现会在编译阶段直接抛出不支持异常，避免继续生成不符合 DSQL 约束的 SQL。该点在设计文档中标记为待完成，不在本轮承诺交付。
 
 ### 5.2 `SELECT *` 展开
 
@@ -276,7 +276,7 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 合法地转换成动态 `LIKE` 模式串。本轮不采用伪实现、不回退为不符合 DSQL 约束的写法，也不把该问题隐藏在 generator 的文本替换中。
 
-后续若 DSQL 明确提供动态模式拼接能力，应在本节状态更新后再补实现与测试。
+当前实现对动态前后缀场景直接报不支持异常，以避免把无效 SQL 传递给下游执行层。后续若 DSQL 明确提供动态模式拼接能力，应在本节状态更新后再补实现与测试。
 
 ## 10. 结论
 
