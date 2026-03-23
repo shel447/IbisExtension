@@ -30,6 +30,7 @@
 | N-10 | `REAL` 输出为 `FLOAT` | 已实现 | Generator | DSQL 类型映射 |
 | N-11 | `DOUBLE PRECISION` 输出为 `DOUBLE` | 已实现 | Generator | DSQL 类型映射 |
 | N-12 | 禁止所有标量子查询 | 已实现 | Compiler | 在任何需要单值的位置统一报错 |
+| N-13 | `CONNECT BY` / `LEVEL` 层次查询 | 已实现 | API + Compiler | 通过 `connect_by()` helper 和内部 `__connect` lowering 实现 |
 
 ### 2.3 待完成项
 
@@ -59,6 +60,7 @@
 - `NOT IN` / `NOT LIKE` 当前表现为 `NOT (...)` 包裹式写法。
 - 顶层表表达式和星号投影仍然可能输出 `SELECT *`。
 - 标量子查询默认允许生成，例如 `WHERE a > (SELECT ...)`。
+- Ibis 本身不提供递归查询表达能力，无法直接生成 DSQL 的 `CONNECT BY` 层次查询。
 
 同时也有一条需求当前已经满足：
 
@@ -154,6 +156,70 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 - 通过回归测试验证 `users.aggregate(total=users.count())` 仍输出 `COUNT(*) AS total`。
 - 若测试揭示某些特殊路径会丢别名，再追加最小覆写。
 
+### 5.5 `CONNECT BY` / `LEVEL` 取巧实现
+
+#### 5.5.1 目标
+
+在不修改上游 Ibis 递归语义的前提下，为 DSQL 提供可编译的层次查询入口，首期支持：
+
+- `START WITH`
+- `CONNECT BY PRIOR`
+- `NOCYCLE`
+- `LEVEL`
+
+同时保持整个扩展“禁止标量子查询”的既有约束不变。
+
+#### 5.5.2 公开入口
+
+新增模块级 helper：
+
+- `ibis_dsql.connect_by(table, *, start_with, parent_key, child_key, nocycle=False, level_name="level")`
+
+其中：
+
+- `start_with` 必须解析为布尔表达式。
+- `start_with` 允许 `IN (subquery)` 和 `EXISTS (...)` 这类非标量子查询。
+- `parent_key` / `child_key` 必须只引用输入表本身，首期只支持单组等值父子键。
+- `level_name` 默认是 `level`；若与输入表已有列名冲突，立即报错。
+
+#### 5.5.3 内部协议
+
+实现不直接构造递归 AST，而是分两层：
+
+1. 先在 Ibis 层构造一个命名为 `__connect` 的内部视图。
+2. 该视图的投影中追加以下保留列：
+   - `__connect_start_with`
+   - `__connect_parent_key`
+   - `__connect_child_key`
+   - `__connect_nocycle`
+   - `level_name` 对应的 `LEVEL` 占位列
+3. 再在外层返回普通表表达式，只暴露源表列和 `level_name`。
+
+这样做的作用是：
+
+- 调用方继续拿到普通 `ibis.Table`，可继续做 `select/filter/order_by`。
+- 编译器可以在 SQLGlot AST 阶段稳定识别 `__connect`，再一次性降级为真正的 `CONNECT BY`。
+
+#### 5.5.4 Lowering 规则
+
+`DSQLCompiler.to_sqlglot()` 在常规翻译完成后增加一个 DSQL 专用 lowering 步骤：
+
+- 识别根查询 `FROM __connect` 且 `WITH __connect AS (...)` 的协议形态。
+- 从 `__connect` CTE 中提取 `start_with`、`parent_key`、`child_key`、`nocycle` 和 `level_name`。
+- 若 `__connect` 的内部查询只是简单基表投影，则直接还原为基表 `FROM`。
+- 若内部查询已包含过滤或其它输入表语义，则保留成派生表子查询，避免丢失上游条件。
+- 将外层对 `level_name` 的引用改写为 SQL 伪列 `LEVEL`。
+- 将整个查询改写为：
+  - `SELECT ... FROM ... [WHERE ...] START WITH ... CONNECT BY [NOCYCLE] PRIOR ... = ... [ORDER BY ...]`
+- 去掉 `__connect` CTE 及所有 `__connect_*` 保留列，保证最终输出里不泄漏内部协议。
+
+#### 5.5.5 `optimize=True` 策略
+
+- `CONNECT BY` 的构造不依赖 `sqlglot.optimizer.optimize()`。
+- 对命中 `CONNECT BY` lowering 的查询，先完成 lowering，再跳过通用 optimizer。
+- 这样可以避免 optimizer 重新解析或重排层次查询结构时破坏 DSQL 语义。
+- 对非 `CONNECT BY` 查询，仍保持现有 `optimize=True` 行为。
+
 ## 6. Generator 层设计
 
 ### 6.1 Interval 输出格式
@@ -223,6 +289,11 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 - 所有标量子查询
 - 动态 `startsWith` / `endsWith`
+- `ORDER SIBLINGS BY`
+- `CONNECT_BY_ROOT`
+- `SYS_CONNECT_BY_PATH`
+- 复合父子键
+- 任意 `prior(...)` 自定义谓词 DSL
 
 ### 7.2 处理原则
 
@@ -247,6 +318,14 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 - `a NOT IN (SELECT ...)`
 - `SELECT *` 展开后的显式列清单
 - `FLOAT` / `DOUBLE` 类型输出
+- `START WITH ... CONNECT BY PRIOR ...`
+- `NOCYCLE`
+- `LEVEL` 投影
+- `LEVEL > 1` 过滤
+- `start_with` 中的 `IN (subquery)`
+- `start_with` 中的 `EXISTS (...)`
+- 派生表输入上的 `CONNECT BY`
+- `optimize=True` 下的 `CONNECT BY` 稳定输出
 
 ### 8.2 异常断言
 
@@ -254,8 +333,12 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 - `WHERE a > (SELECT ...)`
 - `SELECT (subquery) AS x`
+- `connect_by(..., start_with=non_boolean, ...)`
+- `connect_by(..., parent_key=foreign_expr, ...)`
+- `connect_by(..., level_name='existing_column', ...)`
 
 期望统一抛出 `UnsupportedOperationError`，消息为 `DSQL does not support scalar subqueries`。
+对 helper 参数错误则抛出稳定的输入/类型异常。
 
 ### 8.3 对照回归
 
@@ -280,4 +363,4 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 ## 10. 结论
 
-本次 DSQL 语法扩展采用“Compiler 处理结构和禁用能力，Generator 处理输出形态”的分层方案。该方案与现有双层继承结构一致，能以最小覆写实现目标语法，同时把无合法 DSQL 写法支撑的动态前后缀匹配明确记录为待完成项，保证设计边界清晰、行为可测试、后续扩展可持续。
+本次 DSQL 语法扩展继续采用“Compiler 处理结构和禁用能力，Generator 处理输出形态”的分层方案，并在此基础上新增了 `connect_by()` helper 和 `__connect` 内部 lowering 机制，用最小侵入方式补上了 Ibis 原生缺失的层次查询表达能力。同时，动态前后缀匹配等仍无合法 DSQL 写法支撑的需求，继续明确记录为待完成项，保证设计边界清晰、行为可测试、后续扩展可持续。
