@@ -118,9 +118,17 @@ def _rewrite_connect_references(
     return expression.transform(rewrite, copy=True)
 
 
-def _lower_connect_select(expression: sge.Select) -> sge.Select:
-    connect_cte = _connect_cte(expression)
-    if connect_cte is None:
+def _contains_node(node: sge.Expression, ancestor: sge.Expression) -> bool:
+    current = node
+    while current is not None:
+        if current is ancestor:
+            return True
+        current = current.parent
+    return False
+
+
+def _lower_connect_select(expression: sge.Select, *, connect_cte: sge.CTE) -> sge.Select:
+    if _contains_node(expression, connect_cte.this):
         return expression
 
     outer_from = expression.args.get("from_")
@@ -192,13 +200,30 @@ def _lower_connect_select(expression: sge.Select) -> sge.Select:
         ),
     )
 
-    with_ = expression.args.get("with_")
-    if with_ is not None:
-        remaining = [cte for cte in with_.expressions if cte is not connect_cte]
-        if remaining:
-            with_.set("expressions", remaining)
-        else:
-            expression.args.pop("with_", None)
+    return expression
+
+
+def _lower_connect_tree(expression: sge.Select) -> sge.Select:
+    connect_cte = _connect_cte(expression)
+    if connect_cte is None:
+        return expression
+
+    for select in list(expression.find_all(sge.Select)):
+        _lower_connect_select(select, connect_cte=connect_cte)
+
+    remaining_refs = [
+        table
+        for table in expression.find_all(sge.Table)
+        if table.name == CONNECT_CTE_NAME and not _contains_node(table, connect_cte)
+    ]
+    if not remaining_refs:
+        with_ = expression.args.get("with_")
+        if with_ is not None:
+            remaining = [cte for cte in with_.expressions if cte is not connect_cte]
+            if remaining:
+                with_.set("expressions", remaining)
+            else:
+                expression.args.pop("with_", None)
 
     return expression
 
@@ -251,7 +276,7 @@ class DSQLCompiler(PostgresCompiler):
             expressions = sql.args.get("expressions") or []
             if len(expressions) == 1 and isinstance(expressions[0], sge.Star):
                 sql.set("expressions", self._star_fields(expr.as_table().schema().names, sql))
-            sql = _lower_connect_select(sql)
+            sql = _lower_connect_tree(sql)
 
         return sql
 
