@@ -4,6 +4,7 @@ import ibis.common.exceptions as com
 from ibis.backends.sql.compilers.postgres import PostgresCompiler
 import sqlglot as sg
 import sqlglot.expressions as sge
+from sqlglot.optimizer.scope import traverse_scope
 
 from ibis_dsql.dialect import DSQLDialect
 from ibis_dsql.rewrites import DSQL_POST_REWRITES, DSQL_REWRITES
@@ -228,6 +229,30 @@ def _lower_connect_tree(expression: sge.Select) -> sge.Select:
     return expression
 
 
+def _raise_on_invalid_external_columns(expression: sge.Expression) -> None:
+    invalid = []
+
+    for scope in traverse_scope(expression):
+        if scope.is_correlated_subquery:
+            continue
+        invalid.extend(
+            column
+            for column in scope.external_columns
+            if not ((column.table in (None, "")) and column.name.upper() == "LEVEL")
+        )
+
+    if not invalid:
+        return
+
+    references = ", ".join(
+        sorted({column.sql(dialect=DSQLDialect) for column in invalid})
+    )
+    raise com.UnsupportedOperationError(
+        "DSQL does not support using a derived table field as a scalar expression"
+        f"; found unresolved references: {references}"
+    )
+
+
 class DSQLCompiler(PostgresCompiler):
     __slots__ = ()
 
@@ -277,6 +302,7 @@ class DSQLCompiler(PostgresCompiler):
             if len(expressions) == 1 and isinstance(expressions[0], sge.Star):
                 sql.set("expressions", self._star_fields(expr.as_table().schema().names, sql))
             sql = _lower_connect_tree(sql)
+            _raise_on_invalid_external_columns(sql)
 
         return sql
 
