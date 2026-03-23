@@ -20,6 +20,9 @@ CONNECT_METADATA = {
     CONNECT_CHILD_KEY,
     CONNECT_NOCYCLE,
 }
+SCALAR_SUBQUERY_COMPARISONS = (sge.EQ, sge.NEQ, sge.GT, sge.GTE, sge.LT, sge.LTE)
+RELATIONAL_SUBQUERY_PARENTS = (sge.From, sge.Join, sge.CTE)
+NON_SCALAR_SUBQUERY_PARENTS = (*RELATIONAL_SUBQUERY_PARENTS, sge.In, sge.Exists)
 
 
 def _connect_cte(expression: sge.Select) -> sge.CTE | None:
@@ -253,6 +256,23 @@ def _raise_on_invalid_external_columns(expression: sge.Expression) -> None:
     )
 
 
+def _raise_on_invalid_scalar_subqueries(expression: sge.Expression) -> None:
+    invalid = []
+
+    for subquery in expression.find_all(sge.Subquery):
+        parent = subquery.parent
+        if isinstance(parent, NON_SCALAR_SUBQUERY_PARENTS):
+            continue
+        if isinstance(parent, SCALAR_SUBQUERY_COMPARISONS) and subquery.arg_key == "expression":
+            continue
+        invalid.append(subquery)
+
+    if invalid:
+        raise com.UnsupportedOperationError(
+            "DSQL does not support scalar subqueries except as the right-hand side of a comparison"
+        )
+
+
 class DSQLCompiler(PostgresCompiler):
     __slots__ = ()
 
@@ -277,9 +297,7 @@ class DSQLCompiler(PostgresCompiler):
         return sge.Like(this=arg, expression=sge.Literal.string(f"%{end.this}"))
 
     def visit_ScalarSubquery(self, op, *, rel):
-        raise com.UnsupportedOperationError(
-            "DSQL does not support scalar subqueries"
-        )
+        return rel.this.subquery(copy=False)
 
     def _star_fields(self, names, relation):
         table = getattr(relation, "alias_or_name", None)
@@ -303,6 +321,7 @@ class DSQLCompiler(PostgresCompiler):
                 sql.set("expressions", self._star_fields(expr.as_table().schema().names, sql))
             sql = _lower_connect_tree(sql)
             _raise_on_invalid_external_columns(sql)
+            _raise_on_invalid_scalar_subqueries(sql)
 
         return sql
 
