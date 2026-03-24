@@ -189,37 +189,14 @@ def test_to_sql_expands_top_level_star_selection():
     assert sql == "SELECT users.id, users.name FROM users"
 
 
-def test_to_sql_allows_scalar_subquery_on_comparison_rhs():
-    table = ibis.table(
-        [
-            ("x", "string"),
-            ("y", "string"),
-            ("id", "int64"),
-            ("parent", "int64"),
-            ("refParent", "int64"),
-            ("name", "string"),
-        ],
-        name="TableA",
-    )
-    devs = table.filter((table.x == "abc") & table.y.like("%mn%"))
-    expr = table.filter(table.id == devs.refParent.as_scalar()).select("id", "name")
-
-    sql = to_sql(expr)
-
-    assert (
-        sql
-        == "SELECT t0.id, t0.name FROM TableA AS t0 WHERE t0.id = (SELECT t0.refParent FROM TableA AS t0 WHERE t0.x = 'abc' AND t0.y LIKE '%mn%')"
-    )
-
-
-def test_to_sql_rejects_scalar_subquery_on_comparison_lhs():
+def test_to_sql_rejects_scalar_subquery_in_where_clause():
     users = ibis.table([("id", "int64"), ("name", "string")], name="users")
     scalar = users.aggregate(mx=users.id.max()).mx.as_scalar()
-    expr = users.filter(scalar < users.id)
+    expr = users.filter(users.id > scalar)
 
     with pytest.raises(
         com.UnsupportedOperationError,
-        match="DSQL does not support scalar subqueries except as the right-hand side of a comparison",
+        match="DSQL does not support scalar subqueries",
     ):
         to_sql(expr)
 

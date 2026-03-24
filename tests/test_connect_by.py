@@ -173,7 +173,7 @@ def test_connect_by_rejects_level_name_conflict():
         )
 
 
-def test_to_sql_allows_scalar_subquery_on_connect_start_with_comparison_rhs():
+def test_to_sql_rejects_scalar_subquery_in_connect_start_with():
     tree = ibis.table([("id", "int64"), ("parent_id", "int64")], name="tree")
     scalar = tree.aggregate(mx=tree.id.max()).mx.as_scalar()
     expr = connect_by(
@@ -183,12 +183,11 @@ def test_to_sql_allows_scalar_subquery_on_connect_start_with_comparison_rhs():
         child_key=tree.parent_id,
     )
 
-    sql = to_sql(expr)
-
-    assert (
-        sql
-        == "SELECT t0.id, t0.parent_id, LEVEL AS level FROM tree AS t0 START WITH t0.id = (SELECT t1.mx FROM (SELECT MAX(t0.id) AS mx FROM tree AS t0) AS t1) CONNECT BY PRIOR t0.id = t0.parent_id"
-    )
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support scalar subqueries",
+    ):
+        to_sql(expr)
 
 
 def test_compile_optimize_keeps_lowered_connect_by_query_stable():
