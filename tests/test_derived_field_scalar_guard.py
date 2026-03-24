@@ -35,6 +35,23 @@ def test_guard_allows_filter_with_in_subquery():
     )
 
 
+def test_guard_allows_filter_with_in_subquery_over_aliased_derived_chain():
+    table_a = ibis.table(
+        [("x", "string"), ("sid", "int64")],
+        name="TableA",
+    )
+    table_b = ibis.table([("id", "int64")], name="TableB")
+    devs = table_a.filter(table_a.x == "abc")
+    mid = devs.select(fid=devs.sid)
+
+    sql = to_sql(table_b.filter(table_b.id.isin(mid.fid)))
+
+    assert (
+        sql
+        == "SELECT t0.id FROM TableB AS t0 WHERE t0.id IN (SELECT t1.sid AS fid FROM TableA AS t1 WHERE t1.x = 'abc')"
+    )
+
+
 def test_guard_allows_filter_with_exists_subquery():
     left = ibis.table([("id", "int64")], name="left_t")
     right = ibis.table([("id", "int64")], name="right_t")
@@ -175,6 +192,90 @@ def test_guard_rejects_derived_field_inside_function_call():
         match="DSQL does not support using a derived table field as a scalar expression",
     ):
         to_sql(expr)
+
+
+def test_guard_rejects_projected_alias_derived_field_scalar_leak():
+    table_a = ibis.table(
+        [("x", "string"), ("sid", "int64")],
+        name="TableA",
+    )
+    table_b = ibis.table([("id", "int64")], name="TableB")
+    devs = table_a.filter(table_a.x == "abc")
+    mid = devs.select(fid=devs.sid)
+    expr = table_b.filter(table_b.id == mid.fid)
+
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support using a derived table field as a scalar expression",
+    ):
+        to_sql(expr)
+
+
+def test_guard_rejects_mutated_alias_derived_field_scalar_leak():
+    table_a = ibis.table(
+        [("x", "string"), ("sid", "int64")],
+        name="TableA",
+    )
+    table_b = ibis.table([("id", "int64")], name="TableB")
+    devs = table_a.filter(table_a.x == "abc")
+    mid = devs.mutate(fid=devs.sid)
+    expr = table_b.filter(table_b.id == mid.fid)
+
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support using a derived table field as a scalar expression",
+    ):
+        to_sql(expr)
+
+
+def test_guard_rejects_chained_project_alias_derived_field_scalar_leak():
+    table_a = ibis.table(
+        [("x", "string"), ("sid", "int64")],
+        name="TableA",
+    )
+    table_b = ibis.table([("id", "int64")], name="TableB")
+    devs = table_a.filter(table_a.x == "abc")
+    mid = devs.select(fid=devs.sid).select(fid2=lambda t: t.fid)
+    expr = table_b.filter(table_b.id == mid.fid2)
+
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support using a derived table field as a scalar expression",
+    ):
+        to_sql(expr)
+
+
+def test_guard_rejects_view_wrapped_project_alias_derived_field_scalar_leak():
+    table_a = ibis.table(
+        [("x", "string"), ("sid", "int64")],
+        name="TableA",
+    )
+    table_b = ibis.table([("id", "int64")], name="TableB")
+    devs = table_a.filter(table_a.x == "abc").view()
+    mid = devs.select(fid=devs.sid)
+    expr = table_b.filter(table_b.id == mid.fid)
+
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support using a derived table field as a scalar expression",
+    ):
+        to_sql(expr)
+
+
+def test_guard_unary_predicate_from_projected_alias_derived_field_is_rejected_upstream():
+    table_a = ibis.table(
+        [("x", "string"), ("sid", "int64")],
+        name="TableA",
+    )
+    table_b = ibis.table([("id", "int64")], name="TableB")
+    devs = table_a.filter(table_a.x == "abc")
+    mid = devs.select(fid=devs.sid)
+
+    with pytest.raises(
+        com.IntegrityError,
+        match="belong to another relation",
+    ):
+        table_b.filter(mid.fid.isnull())
 
 
 def test_guard_connect_by_start_with_foreign_relation_is_rejected_upstream():
