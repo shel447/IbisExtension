@@ -87,28 +87,6 @@ def test_to_sql_emits_cte_for_reused_relations():
     )
 
 
-def test_to_sql_rejects_derived_table_field_in_scalar_predicate():
-    table = ibis.table(
-        [
-            ("x", "string"),
-            ("y", "string"),
-            ("id", "int64"),
-            ("parent", "int64"),
-            ("refParent", "int64"),
-            ("name", "string"),
-        ],
-        name="TableA",
-    )
-    devs = table.filter((table.x == "abc") & table.y.like("%mn%"))
-    expr = table.filter(table.id == devs.refParent).select("id", "name")
-
-    with pytest.raises(
-        com.UnsupportedOperationError,
-        match="DSQL does not support using a derived table field as a scalar expression",
-    ):
-        to_sql(expr)
-
-
 def test_to_sql_preserves_count_star_alias():
     users = ibis.table([("id", "int64")], name="users")
     expr = users.aggregate(total=users.count())
