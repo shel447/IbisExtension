@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ibis.expr.operations as ops
 import ibis.common.exceptions as com
 from ibis.backends.sql.compilers.postgres import PostgresCompiler
 import sqlglot as sg
@@ -19,6 +20,43 @@ CONNECT_METADATA = {
     CONNECT_CHILD_KEY,
     CONNECT_NOCYCLE,
 }
+
+
+def _raise_on_leaked_derived_fields(op: ops.Node) -> None:
+    seen: set[ops.Node] = set()
+
+    def walk(node: ops.Node) -> None:
+        if node in seen:
+            return
+        seen.add(node)
+
+        if isinstance(node, (ops.ExistsSubquery, ops.InSubquery, ops.ScalarSubquery)):
+            return
+
+        if isinstance(node, ops.Filter):
+            parent = node.parent
+
+            for predicate in node.predicates:
+                if any(rel is not parent for rel in predicate.relations):
+                    raise com.UnsupportedOperationError(
+                        "DSQL does not support using a derived table field as a scalar expression"
+                    )
+
+        for argname in node.__argnames__:
+            value = getattr(node, argname)
+
+            if isinstance(value, ops.Node):
+                walk(value)
+            elif isinstance(value, tuple):
+                for item in value:
+                    if isinstance(item, ops.Node):
+                        walk(item)
+            elif hasattr(value, "values"):
+                for item in value.values():
+                    if isinstance(item, ops.Node):
+                        walk(item)
+
+    walk(op)
 
 
 def _connect_cte(expression: sge.Select) -> sge.CTE | None:
@@ -270,6 +308,8 @@ class DSQLCompiler(PostgresCompiler):
         ]
 
     def to_sqlglot(self, expr, *, limit=None, params=None):
+        _raise_on_leaked_derived_fields(expr.as_table().op())
+
         sql = super().to_sqlglot(expr, limit=limit, params=params)
 
         if isinstance(sql, sge.Select):
