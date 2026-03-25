@@ -5,6 +5,7 @@ import unittest
 import ibis
 import sqlglot.expressions as sge
 
+from ibis_dsql import UnsupportedSyntaxException
 from ibis_dsql import compile as compile_expr
 
 
@@ -73,3 +74,40 @@ class CompilerTest(unittest.TestCase):
         unix_timestamp = multiply.this
         self.assertIsInstance(unix_timestamp, sge.Anonymous)
         self.assertEqual(unix_timestamp.name.upper(), "UNIX_TIMESTAMP")
+
+    def test_compile_rewrites_epoch_millis_vs_native_timestamp_column_to_bigint(self):
+        events = ibis.table([("ts_ms", "int64"), ("ts", "timestamp")], name="events")
+        expr = events.filter(events.ts_ms.cast("timestamp") >= events.ts)
+
+        compiled = compile_expr(expr)
+        comparison = compiled.find(sge.GTE)
+
+        self.assertIsNotNone(comparison)
+        self.assertIsInstance(comparison.this, sge.Column)
+        self.assertEqual(comparison.this.this.name, "ts_ms")
+        self.assertEqual(comparison.this.table, "t0")
+        self.assertIsInstance(comparison.expression, sge.Cast)
+        self.assertEqual(comparison.expression.to.this, sge.DataType.Type.BIGINT)
+
+        multiply = comparison.expression.this
+        self.assertIsInstance(multiply, sge.Mul)
+        unix_timestamp = multiply.this
+        self.assertIsInstance(unix_timestamp, sge.Anonymous)
+        self.assertEqual(unix_timestamp.name.upper(), "UNIX_TIMESTAMP")
+        native_column = unix_timestamp.expressions[0]
+        self.assertIsInstance(native_column, sge.Column)
+        self.assertEqual(native_column.this.name, "ts")
+        self.assertEqual(native_column.table, "t0")
+
+    def test_compile_rejects_timezone_aware_timestamp_in_epoch_millis_comparison(self):
+        events = ibis.table(
+            [("ts_ms", "int64"), ("ts_utc", ibis.dtype("timestamp('UTC')"))],
+            name="events",
+        )
+        expr = events.filter(events.ts_ms.cast("timestamp") >= events.ts_utc)
+
+        with self.assertRaisesRegex(
+            UnsupportedSyntaxException,
+            "DSQL does not support timezone-aware timestamp fields in epoch-millis comparisons",
+        ):
+            compile_expr(expr)

@@ -21,6 +21,9 @@ CONNECT_METADATA = {
     CONNECT_CHILD_KEY,
     CONNECT_NOCYCLE,
 }
+TIMEZONE_AWARE_EPOCH_MILLIS_ERROR = (
+    "DSQL does not support timezone-aware timestamp fields in epoch-millis comparisons"
+)
 
 
 def _is_epoch_millis_timestamp_cast(op: ops.Node) -> bool:
@@ -33,6 +36,16 @@ def _is_epoch_millis_timestamp_cast(op: ops.Node) -> bool:
 
 def _is_timestamp_datetype(dtype) -> bool:
     return dtype.is_timestamp()
+
+
+def _timestamp_timezone(dtype) -> str | None:
+    if not dtype.is_timestamp():
+        return None
+    return getattr(dtype, "timezone", None)
+
+
+def _is_timezone_aware_timestamp_dtype(dtype) -> bool:
+    return dtype.is_timestamp() and _timestamp_timezone(dtype) is not None
 
 
 def _is_sql_int_literal(expression: sge.Expression, value: int) -> bool:
@@ -346,12 +359,20 @@ class DSQLCompiler(PostgresCompiler):
             copy=False,
         )
 
+    def _ensure_supported_epoch_millis_temporal_operands(self, *operands: ops.Node) -> None:
+        if any(_is_timezone_aware_timestamp_dtype(operand.dtype) for operand in operands):
+            raise UnsupportedSyntaxException(TIMEZONE_AWARE_EPOCH_MILLIS_ERROR)
+
     def _should_rewrite_temporal_comparison(self, left_op: ops.Node, right_op: ops.Node) -> bool:
-        return (
+        if not (
             (_is_epoch_millis_timestamp_cast(left_op) or _is_epoch_millis_timestamp_cast(right_op))
             and _is_timestamp_datetype(left_op.dtype)
             and _is_timestamp_datetype(right_op.dtype)
-        )
+        ):
+            return False
+
+        self._ensure_supported_epoch_millis_temporal_operands(left_op, right_op)
+        return True
 
     def _rewrite_temporal_binop(self, op, sg_cls, left, right):
         if not self._should_rewrite_temporal_comparison(op.left, op.right):
@@ -418,6 +439,12 @@ class DSQLCompiler(PostgresCompiler):
             return super().visit_Between(
                 op, arg=arg, lower_bound=lower_bound, upper_bound=upper_bound
             )
+
+        self._ensure_supported_epoch_millis_temporal_operands(
+            op.arg,
+            op.lower_bound,
+            op.upper_bound,
+        )
 
         return sge.Between(
             this=self._timestamp_to_epoch_millis(arg),

@@ -102,6 +102,36 @@ class SqlTest(unittest.TestCase):
             "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts FROM metrics AS t0",
         )
 
+    def test_to_sql_leaves_native_timestamp_select_unchanged(self):
+        events = ibis.table([("ts", "timestamp")], name="events")
+        expr = events.select(events.ts.name("ts2"))
+
+        sql = to_sql(expr)
+
+        self.assertEqual(sql, "SELECT t0.ts AS ts2 FROM events AS t0")
+
+    def test_to_sql_leaves_native_timestamp_order_by_unchanged(self):
+        events = ibis.table([("ts", "timestamp")], name="events")
+        expr = events.order_by(events.ts.desc()).limit(3)
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT t0.ts FROM events AS t0 ORDER BY t0.ts DESC NULLS LAST LIMIT 3",
+        )
+
+    def test_to_sql_leaves_native_timestamp_interval_arithmetic_unchanged(self):
+        events = ibis.table([("ts", "timestamp")], name="events")
+        expr = events.select((events.ts + ibis.interval(days=-1)).name("x"))
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT t0.ts + INTERVAL '-1' DAY AS x FROM events AS t0",
+        )
+
     def test_to_sql_compiles_epoch_millis_cast_to_timestamp_in_order_by(self):
         metrics = ibis.table([("ts_ms", "int64")], name="metrics")
         expr = metrics.order_by(metrics.ts_ms.cast("timestamp").desc()).limit(3)
@@ -155,6 +185,44 @@ class SqlTest(unittest.TestCase):
             "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms BETWEEN CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT) AND CAST(UNIX_TIMESTAMP(CAST('2026-01-02T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)",
         )
 
+    def test_to_sql_rewrites_epoch_millis_vs_native_timestamp_column_to_bigint(self):
+        events = ibis.table([("ts_ms", "int64"), ("ts", "timestamp")], name="events")
+        expr = events.filter(events.ts_ms.cast("timestamp") >= events.ts)
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT t0.ts_ms, t0.ts FROM events AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(t0.ts) * 1000 AS BIGINT)",
+        )
+
+    def test_to_sql_rewrites_native_timestamp_vs_epoch_millis_column_to_bigint(self):
+        events = ibis.table([("ts_ms", "int64"), ("ts", "timestamp")], name="events")
+        expr = events.filter(events.ts <= events.ts_ms.cast("timestamp"))
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT t0.ts_ms, t0.ts FROM events AS t0 WHERE CAST(UNIX_TIMESTAMP(t0.ts) * 1000 AS BIGINT) <= t0.ts_ms",
+        )
+
+    def test_to_sql_rewrites_epoch_millis_between_native_timestamp_columns_to_bigint(self):
+        events = ibis.table(
+            [("ts_ms", "int64"), ("lower_ts", "timestamp"), ("upper_ts", "timestamp")],
+            name="events",
+        )
+        expr = events.filter(
+            events.ts_ms.cast("timestamp").between(events.lower_ts, events.upper_ts)
+        )
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT t0.ts_ms, t0.lower_ts, t0.upper_ts FROM events AS t0 WHERE t0.ts_ms BETWEEN CAST(UNIX_TIMESTAMP(t0.lower_ts) * 1000 AS BIGINT) AND CAST(UNIX_TIMESTAMP(t0.upper_ts) * 1000 AS BIGINT)",
+        )
+
     def test_to_sql_rewrites_dynamic_epoch_millis_timestamp_comparison_to_bigint(self):
         metrics = ibis.table([("ts_ms", "int64")], name="metrics")
         expr = metrics.filter(
@@ -179,6 +247,38 @@ class SqlTest(unittest.TestCase):
             sql,
             "SELECT t0.ts FROM events AS t0 WHERE t0.ts >= CAST('2026-01-01T08:00:00' AS TIMESTAMP)",
         )
+
+    def test_to_sql_rejects_timezone_aware_timestamp_in_epoch_millis_comparison(self):
+        events = ibis.table(
+            [("ts_ms", "int64"), ("ts_utc", ibis.dtype("timestamp('UTC')"))],
+            name="events",
+        )
+        expr = events.filter(events.ts_ms.cast("timestamp") >= events.ts_utc)
+
+        with self.assertRaisesRegex(
+            UnsupportedSyntaxException,
+            "DSQL does not support timezone-aware timestamp fields in epoch-millis comparisons",
+        ):
+            to_sql(expr)
+
+    def test_to_sql_rejects_timezone_aware_timestamp_in_epoch_millis_between(self):
+        events = ibis.table(
+            [
+                ("ts_ms", "int64"),
+                ("lower_utc", ibis.dtype("timestamp('UTC')")),
+                ("upper_utc", ibis.dtype("timestamp('UTC')")),
+            ],
+            name="events",
+        )
+        expr = events.filter(
+            events.ts_ms.cast("timestamp").between(events.lower_utc, events.upper_utc)
+        )
+
+        with self.assertRaisesRegex(
+            UnsupportedSyntaxException,
+            "DSQL does not support timezone-aware timestamp fields in epoch-millis comparisons",
+        ):
+            to_sql(expr)
 
     def test_to_sql_supports_group_filter_queries(self):
         users = ibis.table([("name", "string"), ("score", "int64")], name="users")
