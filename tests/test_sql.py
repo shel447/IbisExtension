@@ -42,6 +42,59 @@ def test_to_sql_rewrites_endswith_literal_to_like():
     assert sql == "SELECT t0.name FROM users AS t0 WHERE t0.name LIKE '%yz'"
 
 
+def test_to_sql_rewrites_string_concat_to_concat_function():
+    strings = ibis.table([("a", "string"), ("b", "string")], name="strings")
+    expr = strings.select((strings.a + strings.b).name("c"))
+
+    sql = to_sql(expr)
+
+    assert sql == "SELECT CONCAT(t0.a, t0.b) AS c FROM strings AS t0"
+
+
+def test_to_sql_rewrites_nested_string_concat_to_nested_concat_function():
+    strings = ibis.table([("a", "string"), ("b", "string")], name="strings")
+    expr = strings.select((strings.a + strings.b + ibis.literal("x")).name("c"))
+
+    sql = to_sql(expr)
+
+    assert sql == "SELECT CONCAT(CONCAT(t0.a, t0.b), 'x') AS c FROM strings AS t0"
+
+
+def test_to_sql_rewrites_timestamp_string_concat_to_concat_function():
+    expr = ibis.timestamp(ibis.now().cast("date").strftime("%Y-%m-%d") + " 09:00:00")
+
+    sql = to_sql(expr)
+
+    assert sql == (
+        "SELECT CAST(CONCAT(TO_CHAR(CAST(CURRENT_TIMESTAMP AS DATE), 'YYYY-MM-DD'), "
+        "' 09:00:00') AS TIMESTAMP) AS Cast(StringConcat((Strftime(Cast(TimestampNow(), "
+        "date), '%Y-%m-%d'), ' 09:00:00')), timestamp)"
+    )
+    assert "||" not in sql
+
+
+def test_to_sql_rejects_dynamic_startswith_patterns():
+    users = ibis.table([("name", "string"), ("prefix", "string")], name="users")
+    expr = users.filter(users.name.startswith(users.prefix))
+
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support dynamic startswith patterns",
+    ):
+        to_sql(expr)
+
+
+def test_to_sql_rejects_dynamic_endswith_patterns():
+    users = ibis.table([("name", "string"), ("suffix", "string")], name="users")
+    expr = users.filter(users.name.endswith(users.suffix))
+
+    with pytest.raises(
+        com.UnsupportedOperationError,
+        match="DSQL does not support dynamic endswith patterns",
+    ):
+        to_sql(expr)
+
+
 def test_to_sql_supports_group_filter_queries():
     users = ibis.table([("name", "string"), ("score", "int64")], name="users")
     expr = (

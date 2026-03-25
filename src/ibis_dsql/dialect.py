@@ -17,6 +17,9 @@ class DSQLDialect(Postgres):
         }
         TRANSFORMS = {
             **Postgres.Generator.TRANSFORMS,
+            exp.DPipe: lambda self, expression: self.func(
+                "CONCAT", expression.this, expression.expression
+            ),
             exp.Rand: lambda self, expression: self.func("RAND"),
             exp.StrPosition: lambda self, expression: self.func(
                 "INSTR", expression.this, expression.args["substr"]
