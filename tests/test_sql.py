@@ -95,6 +95,98 @@ def test_to_sql_rejects_dynamic_endswith_patterns():
         to_sql(expr)
 
 
+def test_to_sql_compiles_epoch_millis_cast_to_timestamp_in_select():
+    metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+    expr = metrics.select(metrics.ts_ms.cast("timestamp").name("ts"))
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts FROM metrics AS t0"
+    )
+
+
+def test_to_sql_compiles_epoch_millis_cast_to_timestamp_in_order_by():
+    metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+    expr = metrics.order_by(metrics.ts_ms.cast("timestamp").desc()).limit(3)
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT t0.ts_ms FROM metrics AS t0 ORDER BY CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) DESC NULLS LAST LIMIT 3"
+    )
+
+
+def test_to_sql_preserves_interval_arithmetic_for_epoch_millis_timestamps():
+    metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+    expr = metrics.select((metrics.ts_ms.cast("timestamp") + ibis.interval(days=-1)).name("x"))
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) + INTERVAL '-1' DAY AS x FROM metrics AS t0"
+    )
+
+
+def test_to_sql_rewrites_epoch_millis_timestamp_comparison_to_bigint():
+    metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+    expr = metrics.filter(metrics.ts_ms.cast("timestamp") >= ibis.timestamp("2026-01-01 08:00:00"))
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)"
+    )
+
+
+def test_to_sql_rewrites_epoch_millis_timestamp_between_to_bigint():
+    metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+    expr = metrics.filter(
+        metrics.ts_ms.cast("timestamp").between(
+            ibis.timestamp("2026-01-01 08:00:00"),
+            ibis.timestamp("2026-01-02 08:00:00"),
+        )
+    )
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms BETWEEN CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT) AND CAST(UNIX_TIMESTAMP(CAST('2026-01-02T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)"
+    )
+
+
+def test_to_sql_rewrites_dynamic_epoch_millis_timestamp_comparison_to_bigint():
+    metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+    expr = metrics.filter(
+        metrics.ts_ms.cast("timestamp")
+        >= ibis.timestamp(ibis.now().cast("date").strftime("%Y-%m-%d") + " 09:00:00")
+    )
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(CAST(CONCAT(TO_CHAR(CAST(CURRENT_TIMESTAMP AS DATE), 'YYYY-MM-DD'), ' 09:00:00') AS TIMESTAMP)) * 1000 AS BIGINT)"
+    )
+
+
+def test_to_sql_leaves_native_timestamp_comparison_unchanged():
+    events = ibis.table([("ts", "timestamp")], name="events")
+    expr = events.filter(events.ts >= ibis.timestamp("2026-01-01 08:00:00"))
+
+    sql = to_sql(expr)
+
+    assert (
+        sql
+        == "SELECT t0.ts FROM events AS t0 WHERE t0.ts >= CAST('2026-01-01T08:00:00' AS TIMESTAMP)"
+    )
+
+
 def test_to_sql_supports_group_filter_queries():
     users = ibis.table([("name", "string"), ("score", "int64")], name="users")
     expr = (

@@ -22,6 +22,33 @@ CONNECT_METADATA = {
 }
 
 
+def _is_epoch_millis_timestamp_cast(op: ops.Node) -> bool:
+    return (
+        isinstance(op, ops.Cast)
+        and op.arg.dtype.is_integer()
+        and op.to.is_timestamp()
+    )
+
+
+def _is_timestamp_datetype(dtype) -> bool:
+    return dtype.is_timestamp()
+
+
+def _is_sql_int_literal(expression: sge.Expression, value: int) -> bool:
+    return (
+        isinstance(expression, sge.Literal)
+        and not expression.is_string
+        and str(expression.this) == str(value)
+    )
+
+
+def _is_anonymous_function(expression: sge.Expression, name: str) -> bool:
+    return (
+        isinstance(expression, sge.Anonymous)
+        and expression.name.upper() == name.upper()
+    )
+
+
 def _raise_on_leaked_derived_fields(op: ops.Node) -> None:
     seen: set[tuple[ops.Node, frozenset[ops.Relation]]] = set()
 
@@ -283,6 +310,58 @@ class DSQLCompiler(PostgresCompiler):
     rewrites = (*DSQL_REWRITES, *PostgresCompiler.rewrites)
     post_rewrites = (*DSQL_POST_REWRITES, *PostgresCompiler.post_rewrites)
 
+    def _epoch_millis_to_timestamp(self, arg: sge.Expression, to) -> sge.Expression:
+        seconds = self.binop(sge.Div, arg, sge.convert(1000))
+        return self.cast(sg.func("FROM_UNIXTIME", seconds), to)
+
+    def _unwrap_epoch_millis_timestamp(self, expression: sge.Expression) -> sge.Expression | None:
+        if not isinstance(expression, sge.Cast):
+            return None
+
+        to = expression.to
+        if not isinstance(to, sge.DataType) or to.this != sge.DataType.Type.TIMESTAMP:
+            return None
+
+        inner = expression.this
+        if not _is_anonymous_function(inner, "FROM_UNIXTIME") or len(inner.expressions) != 1:
+            return None
+
+        division = inner.expressions[0]
+        if not isinstance(division, sge.Div) or not _is_sql_int_literal(division.expression, 1000):
+            return None
+
+        return division.this.copy()
+
+    def _timestamp_to_epoch_millis(self, expression: sge.Expression) -> sge.Expression:
+        raw = self._unwrap_epoch_millis_timestamp(expression)
+        if raw is not None:
+            return raw
+
+        seconds = sg.func("UNIX_TIMESTAMP", expression.copy())
+        millis = self.binop(sge.Mul, seconds, sge.convert(1000))
+        return sge.Cast(
+            this=millis,
+            to=sge.DataType(this=sge.DataType.Type.BIGINT),
+            copy=False,
+        )
+
+    def _should_rewrite_temporal_comparison(self, left_op: ops.Node, right_op: ops.Node) -> bool:
+        return (
+            (_is_epoch_millis_timestamp_cast(left_op) or _is_epoch_millis_timestamp_cast(right_op))
+            and _is_timestamp_datetype(left_op.dtype)
+            and _is_timestamp_datetype(right_op.dtype)
+        )
+
+    def _rewrite_temporal_binop(self, op, sg_cls, left, right):
+        if not self._should_rewrite_temporal_comparison(op.left, op.right):
+            return self.binop(sg_cls, left, right)
+
+        return self.binop(
+            sg_cls,
+            self._timestamp_to_epoch_millis(left),
+            self._timestamp_to_epoch_millis(right),
+        )
+
     def visit_StartsWith(self, op, *, arg, start):
         if not isinstance(start, sge.Literal) or not start.is_string:
             raise com.UnsupportedOperationError(
@@ -302,6 +381,47 @@ class DSQLCompiler(PostgresCompiler):
     def visit_ScalarSubquery(self, op, *, rel):
         raise com.UnsupportedOperationError(
             "DSQL does not support scalar subqueries"
+        )
+
+    def visit_Cast(self, op, *, arg, to):
+        if _is_epoch_millis_timestamp_cast(op):
+            return self._epoch_millis_to_timestamp(arg, to)
+
+        return super().visit_Cast(op, arg=arg, to=to)
+
+    def visit_Equals(self, op, *, left, right):
+        return self._rewrite_temporal_binop(op, sge.EQ, left, right)
+
+    def visit_NotEquals(self, op, *, left, right):
+        return self._rewrite_temporal_binop(op, sge.NEQ, left, right)
+
+    def visit_Greater(self, op, *, left, right):
+        return self._rewrite_temporal_binop(op, sge.GT, left, right)
+
+    def visit_GreaterEqual(self, op, *, left, right):
+        return self._rewrite_temporal_binop(op, sge.GTE, left, right)
+
+    def visit_Less(self, op, *, left, right):
+        return self._rewrite_temporal_binop(op, sge.LT, left, right)
+
+    def visit_LessEqual(self, op, *, left, right):
+        return self._rewrite_temporal_binop(op, sge.LTE, left, right)
+
+    def visit_Between(self, op, *, arg, lower_bound, upper_bound):
+        if not (
+            _is_epoch_millis_timestamp_cast(op.arg)
+            and _is_timestamp_datetype(op.arg.dtype)
+            and _is_timestamp_datetype(op.lower_bound.dtype)
+            and _is_timestamp_datetype(op.upper_bound.dtype)
+        ):
+            return super().visit_Between(
+                op, arg=arg, lower_bound=lower_bound, upper_bound=upper_bound
+            )
+
+        return sge.Between(
+            this=self._timestamp_to_epoch_millis(arg),
+            low=self._timestamp_to_epoch_millis(lower_bound),
+            high=self._timestamp_to_epoch_millis(upper_bound),
         )
 
     def _star_fields(self, names, relation):

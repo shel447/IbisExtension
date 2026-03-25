@@ -32,12 +32,14 @@
 | N-11 | `DOUBLE PRECISION` 输出为 `DOUBLE` | 已实现 | Generator | DSQL 类型映射 |
 | N-12 | 禁止所有标量子查询 | 已实现 | Compiler | 在任何需要单值的位置统一报错 |
 | N-13 | `CONNECT BY` / `LEVEL` 层次查询 | 已实现 | API + Compiler | 通过 `connect_by()` helper 和内部 `__connect` lowering 实现 |
+| N-14 | `epoch-ms bigint -> timestamp` 编译协议 | 已实现 | Compiler | 非比较场景保留时间语义，比较场景化简为 long 毫秒比较 |
 
 ### 2.3 待完成项
 
 | 编号 | 项目 | 状态 | 原因 |
 | --- | --- | --- | --- |
 | P-01 | `startsWith` / `endsWith` 动态前后缀匹配 | 待完成 | 虽然 DSQL 已支持 `CONCAT`，但本轮仍不开放动态模式拼接行为，继续保持编译期显式报错 |
+| P-02 | 原生 `timestamp/datetime` 表字段时间优化 | 待完成 | 本轮只覆盖 `epoch-ms bigint -> timestamp` 这条规范链，原生时间列后续单独设计 |
 
 ## 3. 设计背景与现状分析
 
@@ -221,6 +223,57 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 - 这样可以避免 optimizer 重新解析或重排层次查询结构时破坏 DSQL 语义。
 - 对非 `CONNECT BY` 查询，仍保持现有 `optimize=True` 行为。
 
+### 5.6 `epoch-ms bigint -> timestamp` 时间语义优化
+
+#### 5.6.1 背景
+
+当前业务数据表中的时间字段是 13 位 UTC 毫秒 `bigint`。为了约束大模型生成的 Ibis 表达式，调用方约定：
+
+- 先把 long 字段 `cast("timestamp")`
+- 后续一律按时间类型继续写表达式
+- 编译器负责把这条规范链翻译成符合 DSQL 语义且尽量高效的 SQL
+
+本轮只覆盖这条规范链，不提前处理真正的原生 `timestamp/datetime` 表字段。
+
+#### 5.6.2 非比较场景
+
+当 `bigint/int64 -> timestamp` cast 出现在以下非比较场景时，保留“时间语义”：
+
+- `SELECT`
+- `ORDER BY`
+- 时间算术，例如 `+/- INTERVAL`
+- 其它不属于比较运算的上下文
+
+统一输出为：
+
+- `CAST(FROM_UNIXTIME(col / 1000) AS TIMESTAMP)`
+
+当前 sqlglot/Postgres generator 会把 `/ 1000` 序列化成带显式 double cast 的除法形式；这不改变语义，本轮接受该输出细节。
+
+#### 5.6.3 比较场景
+
+当比较表达式满足以下条件时，改写成 long 毫秒比较：
+
+- 至少一侧是 `bigint/int64 -> timestamp` 的规范 cast
+- 两侧操作数都是 timestamp 语义
+- 覆盖 `= != > >= < <=`
+- 以及 `BETWEEN`
+
+改写规则为：
+
+- `epoch_ms_col.cast("timestamp") <op> ts_expr`
+  -> `epoch_ms_col <op> CAST(UNIX_TIMESTAMP(ts_expr) * 1000 AS BIGINT)`
+- `epoch_ms_col.cast("timestamp").between(lower_ts, upper_ts)`
+  -> `epoch_ms_col BETWEEN CAST(UNIX_TIMESTAMP(lower_ts) * 1000 AS BIGINT) AND CAST(UNIX_TIMESTAMP(upper_ts) * 1000 AS BIGINT)`
+
+如果另一侧本身也是同样的 `epoch-ms` cast，则直接还原为原始 long 列比较。
+
+#### 5.6.4 时间解释口径
+
+- 时间字符串按本地时间格式解释，例如 `'2026-01-01 08:00:00'` 表示本地时间早上 8 点
+- 由 `strftime`、字符串拼接等方式构造出的 timestamp 表达式，先按正常 timestamp 语义生成，再在比较优化中统一通过 `UNIX_TIMESTAMP(...) * 1000` 换算成 long
+- timestamp 类型本身按“绝对 UTC 时刻”处理，但本轮不扩展到原生 timestamp/datetime 字段的全量优化
+
 ## 6. Generator 层设计
 
 ### 6.1 Interval 输出格式
@@ -362,6 +415,18 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 当前实现对动态前后缀场景直接报不支持异常，以避免把无效 SQL 传递给下游执行层。后续若 DSQL 明确提供动态模式拼接能力，应在本节状态更新后再补实现与测试。
 
+### 9.2 原生时间字段
+
+本轮时间优化只覆盖“`epoch-ms bigint` 先 cast 成 `timestamp`，再按时间类型写表达式”这条规范链。
+
+真正的原生 `timestamp/datetime` 表字段尚未纳入统一 long 化简策略，原因是：
+
+- 它们不需要 `epoch-ms -> timestamp` 的解释步骤
+- 比较、算术、字符串格式化和时区口径需要单独设计
+- 若与本轮方案混在一起实现，容易把 long 语义和原生时间列语义耦合
+
+因此原生时间字段的编译优化保留到后续专题中单独设计与实现。
+
 ## 10. 结论
 
-本次 DSQL 语法扩展继续采用“Compiler 处理结构和禁用能力，Generator 处理输出形态”的分层方案，并在此基础上新增了 `connect_by()` helper 和 `__connect` 内部 lowering 机制，用最小侵入方式补上了 Ibis 原生缺失的层次查询表达能力。同时，动态前后缀匹配等仍无合法 DSQL 写法支撑的需求，继续明确记录为待完成项，保证设计边界清晰、行为可测试、后续扩展可持续。
+本次 DSQL 语法扩展继续采用“Compiler 处理结构和禁用能力，Generator 处理输出形态”的分层方案，并在此基础上新增了 `connect_by()` helper 和 `__connect` 内部 lowering 机制，用最小侵入方式补上了 Ibis 原生缺失的层次查询表达能力。针对时间语义，本轮进一步补齐了 `epoch-ms bigint -> timestamp` 这条约定式规范链的编译协议：非比较场景保留时间表达式，比较场景化简成 long 毫秒比较。与此同时，动态前后缀匹配和原生时间字段等仍未完成的能力继续明确登记为待完成项，保证设计边界清晰、行为可测试、后续扩展可持续。
