@@ -139,7 +139,7 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 #### 5.3.2 实现方式
 
 - 在 `DSQLCompiler` 中覆写 `visit_ScalarSubquery()`。
-- 一旦检测到 `ops.ScalarSubquery`，立即抛出 `UnsupportedOperationError`。
+- 一旦检测到 `ops.ScalarSubquery`，立即抛出 `UnsupportedSyntaxException`。
 - 异常消息固定为 `DSQL does not support scalar subqueries`，保持一致性和可测试性。
 
 #### 5.3.3 边界
@@ -391,7 +391,7 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 - `connect_by(..., parent_key=foreign_expr, ...)`
 - `connect_by(..., level_name='existing_column', ...)`
 
-期望统一抛出 `UnsupportedOperationError`，消息为 `DSQL does not support scalar subqueries`。
+期望统一抛出 `UnsupportedSyntaxException`，消息为 `DSQL does not support scalar subqueries`。
 对 helper 参数错误则抛出稳定的输入/类型异常。
 
 ### 8.3 对照回归

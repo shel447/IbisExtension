@@ -53,7 +53,7 @@ For each relation node that owns scalar expressions:
 2. Traverse each owned scalar expression.
 3. Ignore fields whose `rel` is one of the valid local inputs.
 4. Ignore fields under explicit subquery-boundary nodes.
-5. If a field’s `rel` is a derived relation outside the local input set, raise `UnsupportedOperationError`.
+5. If a field’s `rel` is a derived relation outside the local input set, raise `UnsupportedSyntaxException`.
 
 This rule is intentionally narrow. It focuses on Ibis relation ownership instead of trying to infer legality from SQL aliasing after lowering.
 

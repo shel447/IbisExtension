@@ -7,6 +7,7 @@ import sqlglot as sg
 import sqlglot.expressions as sge
 
 from ibis_dsql.dialect import DSQLDialect
+from ibis_dsql.exceptions import UnsupportedSyntaxException
 from ibis_dsql.rewrites import DSQL_POST_REWRITES, DSQL_REWRITES
 
 CONNECT_CTE_NAME = "__connect"
@@ -68,7 +69,7 @@ def _raise_on_leaked_derived_fields(op: ops.Node) -> None:
 
             for predicate in node.predicates:
                 if any(rel not in current_relations for rel in predicate.relations):
-                    raise com.UnsupportedOperationError(
+                    raise UnsupportedSyntaxException(
                         "DSQL does not support using a derived table field as a scalar expression"
                     )
 
@@ -105,7 +106,7 @@ def _connect_cte(expression: sge.Select) -> sge.CTE | None:
     if not matches:
         return None
     if len(matches) > 1:
-        raise com.UnsupportedOperationError(
+        raise UnsupportedSyntaxException(
             "DSQL supports at most one connect_by relation per query"
         )
     return matches[0]
@@ -116,11 +117,11 @@ def _extract_connect_parts(
 ) -> tuple[sge.Expression, str | None, str, dict[str, sge.Expression]]:
     query = cte.this
     if not isinstance(query, sge.Select):
-        raise com.UnsupportedOperationError("DSQL connect_by lowering expected a SELECT CTE")
+        raise UnsupportedSyntaxException("DSQL connect_by lowering expected a SELECT CTE")
 
     source = query.args.get("from_")
     if source is None or source.this is None:
-        raise com.UnsupportedOperationError("DSQL connect_by lowering expected a FROM source")
+        raise UnsupportedSyntaxException("DSQL connect_by lowering expected a FROM source")
 
     metadata: dict[str, sge.Expression] = {}
     level_name: str | None = None
@@ -137,11 +138,11 @@ def _extract_connect_parts(
 
     missing = CONNECT_METADATA.difference(metadata)
     if missing:
-        raise com.UnsupportedOperationError(
+        raise UnsupportedSyntaxException(
             f"DSQL connect_by lowering missing metadata columns: {sorted(missing)}"
         )
     if level_name is None:
-        raise com.UnsupportedOperationError("DSQL connect_by lowering could not determine level column")
+        raise UnsupportedSyntaxException("DSQL connect_by lowering could not determine level column")
 
     source_alias = getattr(source.this, "alias_or_name", None)
     source_query = query.copy()
@@ -364,7 +365,7 @@ class DSQLCompiler(PostgresCompiler):
 
     def visit_StartsWith(self, op, *, arg, start):
         if not isinstance(start, sge.Literal) or not start.is_string:
-            raise com.UnsupportedOperationError(
+            raise UnsupportedSyntaxException(
                 "DSQL does not support dynamic startswith patterns"
             )
 
@@ -372,14 +373,14 @@ class DSQLCompiler(PostgresCompiler):
 
     def visit_EndsWith(self, op, *, arg, end):
         if not isinstance(end, sge.Literal) or not end.is_string:
-            raise com.UnsupportedOperationError(
+            raise UnsupportedSyntaxException(
                 "DSQL does not support dynamic endswith patterns"
             )
 
         return sge.Like(this=arg, expression=sge.Literal.string(f"%{end.this}"))
 
     def visit_ScalarSubquery(self, op, *, rel):
-        raise com.UnsupportedOperationError(
+        raise UnsupportedSyntaxException(
             "DSQL does not support scalar subqueries"
         )
 

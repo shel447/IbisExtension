@@ -6,7 +6,7 @@
 
 **Architecture:** Add a broad regression matrix first, then implement a compiler-side validator over the Ibis relation tree. The validator checks only local scalar expression slots and explicitly skips real subquery-boundary nodes, avoiding the false positives that came from SQL-side scope heuristics.
 
-**Tech Stack:** Python, `ibis-framework==11.0.0`, `sqlglot==28.1.0`, `pytest`
+**Tech Stack:** Python, `ibis-framework==11.0.0`, `sqlglot==28.1.0`, `unittest`
 
 ---
 
@@ -36,7 +36,7 @@ Add illegal-case tests for:
 
 **Step 2: Run test to verify it fails**
 
-Run: `E:\code\codex_projects\IbisExtension\.venv\Scripts\python -m pytest tests/test_derived_field_scalar_guard.py -q`
+Run: `E:\code\codex_projects\IbisExtension\.venv\Scripts\python -m unittest tests.test_derived_field_scalar_guard`
 
 Expected: illegal-case tests fail because the compiler still produces bad SQL instead of rejecting them.
 
@@ -51,11 +51,11 @@ Expected: illegal-case tests fail because the compiler still produces bad SQL in
 - add a validator that walks the Ibis relation tree before SQL serialization
 - inspect only scalar expression slots owned by each relation node
 - stop descent at `InSubquery`, `ExistsSubquery`, and `ScalarSubquery`
-- raise `UnsupportedOperationError` when a foreign derived relation field is used directly as a scalar
+- raise `UnsupportedSyntaxException` when a foreign derived relation field is used directly as a scalar
 
 **Step 2: Run focused tests**
 
-Run: `E:\code\codex_projects\IbisExtension\.venv\Scripts\python -m pytest tests/test_derived_field_scalar_guard.py -q`
+Run: `E:\code\codex_projects\IbisExtension\.venv\Scripts\python -m unittest tests.test_derived_field_scalar_guard`
 
 Expected: PASS
 
@@ -69,7 +69,7 @@ Expected: PASS
 
 **Step 1: Run the full suite**
 
-Run: `E:\code\codex_projects\IbisExtension\.venv\Scripts\python -m pytest -q`
+Run: `E:\code\codex_projects\IbisExtension\.venv\Scripts\python -m unittest discover -s tests -p "test_*.py" -t .`
 
 Expected: PASS
 

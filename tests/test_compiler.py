@@ -1,70 +1,75 @@
 from __future__ import annotations
 
+import unittest
+
 import ibis
 import sqlglot.expressions as sge
 
 from ibis_dsql import compile as compile_expr
 
 
-def test_compile_returns_ast_with_expected_cast_shape():
-    users = ibis.table([("id", "int64")], name="users")
-    expr = users.select(users.id.cast("string").name("id_text"))
+class CompilerTest(unittest.TestCase):
+    def test_compile_returns_ast_with_expected_cast_shape(self):
+        users = ibis.table([("id", "int64")], name="users")
+        expr = users.select(users.id.cast("string").name("id_text"))
 
-    compiled = compile_expr(expr)
-    cast = compiled.find(sge.Cast)
-    column = cast.this
+        compiled = compile_expr(expr)
+        cast = compiled.find(sge.Cast)
+        column = cast.this
 
-    assert isinstance(cast, sge.Cast)
-    assert isinstance(column, sge.Column)
-    assert column.this.name == "id"
-    assert column.table == "t0"
-    assert cast.to.this == sge.DataType.Type.VARCHAR
+        self.assertIsInstance(cast, sge.Cast)
+        self.assertIsInstance(column, sge.Column)
+        self.assertEqual(column.this.name, "id")
+        self.assertEqual(column.table, "t0")
+        self.assertEqual(cast.to.this, sge.DataType.Type.VARCHAR)
 
+    def test_compile_rewrites_epoch_millis_cast_to_from_unixtime_timestamp(self):
+        metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+        expr = metrics.select(metrics.ts_ms.cast("timestamp").name("ts"))
 
-def test_compile_rewrites_epoch_millis_cast_to_from_unixtime_timestamp():
-    metrics = ibis.table([("ts_ms", "int64")], name="metrics")
-    expr = metrics.select(metrics.ts_ms.cast("timestamp").name("ts"))
+        compiled = compile_expr(expr)
+        cast = compiled.find(sge.Cast)
 
-    compiled = compile_expr(expr)
-    cast = compiled.find(sge.Cast)
+        self.assertIsNotNone(cast)
+        self.assertEqual(cast.to.this, sge.DataType.Type.TIMESTAMP)
+        self.assertIsNone(compiled.find(sge.UnixToTime))
 
-    assert cast is not None
-    assert cast.to.this == sge.DataType.Type.TIMESTAMP
-    assert compiled.find(sge.UnixToTime) is None
+        from_unixtime = next(
+            node
+            for node in compiled.find_all(sge.Anonymous)
+            if node.name.upper() == "FROM_UNIXTIME"
+        )
+        division = from_unixtime.expressions[0]
 
-    from_unixtime = next(
-        node
-        for node in compiled.find_all(sge.Anonymous)
-        if node.name.upper() == "FROM_UNIXTIME"
-    )
-    division = from_unixtime.expressions[0]
+        self.assertIsInstance(division, sge.Div)
+        self.assertIsInstance(division.this, sge.Column)
+        self.assertEqual(division.this.this.name, "ts_ms")
+        self.assertEqual(division.this.table, "t0")
+        self.assertEqual(division.expression, sge.convert(1000))
 
-    assert isinstance(division, sge.Div)
-    assert isinstance(division.this, sge.Column)
-    assert division.this.this.name == "ts_ms"
-    assert division.this.table == "t0"
-    assert division.expression == sge.convert(1000)
+    def test_compile_rewrites_epoch_millis_timestamp_comparison_to_bigint_comparison(
+        self,
+    ):
+        metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+        expr = metrics.filter(
+            metrics.ts_ms.cast("timestamp") >= ibis.timestamp("2026-01-01 08:00:00")
+        )
 
+        compiled = compile_expr(expr)
+        comparison = compiled.find(sge.GTE)
 
-def test_compile_rewrites_epoch_millis_timestamp_comparison_to_bigint_comparison():
-    metrics = ibis.table([("ts_ms", "int64")], name="metrics")
-    expr = metrics.filter(metrics.ts_ms.cast("timestamp") >= ibis.timestamp("2026-01-01 08:00:00"))
+        self.assertIsNotNone(comparison)
+        self.assertIsInstance(comparison.this, sge.Column)
+        self.assertEqual(comparison.this.this.name, "ts_ms")
+        self.assertEqual(comparison.this.table, "t0")
+        self.assertIsNone(compiled.find(sge.UnixToTime))
+        self.assertIsInstance(comparison.expression, sge.Cast)
+        self.assertEqual(comparison.expression.to.this, sge.DataType.Type.BIGINT)
 
-    compiled = compile_expr(expr)
-    comparison = compiled.find(sge.GTE)
+        multiply = comparison.expression.this
+        self.assertIsInstance(multiply, sge.Mul)
+        self.assertEqual(multiply.expression, sge.convert(1000))
 
-    assert comparison is not None
-    assert isinstance(comparison.this, sge.Column)
-    assert comparison.this.this.name == "ts_ms"
-    assert comparison.this.table == "t0"
-    assert compiled.find(sge.UnixToTime) is None
-    assert isinstance(comparison.expression, sge.Cast)
-    assert comparison.expression.to.this == sge.DataType.Type.BIGINT
-
-    multiply = comparison.expression.this
-    assert isinstance(multiply, sge.Mul)
-    assert multiply.expression == sge.convert(1000)
-
-    unix_timestamp = multiply.this
-    assert isinstance(unix_timestamp, sge.Anonymous)
-    assert unix_timestamp.name.upper() == "UNIX_TIMESTAMP"
+        unix_timestamp = multiply.this
+        self.assertIsInstance(unix_timestamp, sge.Anonymous)
+        self.assertEqual(unix_timestamp.name.upper(), "UNIX_TIMESTAMP")
