@@ -352,12 +352,20 @@ class DSQLCompiler(PostgresCompiler):
             return raw
 
         seconds = sg.func("UNIX_TIMESTAMP", expression.copy())
-        millis = self.binop(sge.Mul, seconds, sge.convert(1000))
-        return sge.Cast(
-            this=millis,
-            to=sge.DataType(this=sge.DataType.Type.BIGINT),
-            copy=False,
-        )
+        return self.binop(sge.Mul, seconds, sge.convert(1000))
+
+    def _rewrite_epoch_millis_projection(self, expression: sge.Expression) -> sge.Expression:
+        if isinstance(expression, sge.Alias):
+            raw = self._unwrap_epoch_millis_timestamp(expression.this)
+            if raw is None:
+                return expression
+
+            rewritten = expression.copy()
+            rewritten.set("this", raw)
+            return rewritten
+
+        raw = self._unwrap_epoch_millis_timestamp(expression)
+        return raw if raw is not None else expression
 
     def _ensure_supported_epoch_millis_temporal_operands(self, *operands: ops.Node) -> None:
         if any(_is_timezone_aware_timestamp_dtype(operand.dtype) for operand in operands):
@@ -475,6 +483,11 @@ class DSQLCompiler(PostgresCompiler):
             if len(expressions) == 1 and isinstance(expressions[0], sge.Star):
                 sql.set("expressions", self._star_fields(expr.as_table().schema().names, sql))
             sql = _lower_connect_tree(sql)
+            for select in sql.find_all(sge.Select):
+                select.set(
+                    "expressions",
+                    [self._rewrite_epoch_millis_projection(expr) for expr in select.expressions],
+                )
 
         return sql
 

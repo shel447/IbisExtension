@@ -19,7 +19,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts FROM metrics AS t0",
+            "SELECT t0.ts_ms AS ts FROM metrics AS t0",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_filter_and_select(self):
@@ -33,7 +33,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts_ms, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)",
+            "SELECT t0.ts_ms AS ts_ms, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000)",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_date_filter(self):
@@ -47,7 +47,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts_ms, t0.value FROM metrics AS t0 WHERE DATE(CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = MAKE_DATE(2026, 1, 1)",
+            "SELECT t0.ts_ms AS ts_ms, t0.value FROM metrics AS t0 WHERE DATE(CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = MAKE_DATE(2026, 1, 1)",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_truncate_select(self):
@@ -126,7 +126,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)",
+            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000)",
         )
 
     def test_to_sql_rewrites_epoch_millis_timestamp_between_to_bigint(self):
@@ -142,7 +142,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms BETWEEN CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT) AND CAST(UNIX_TIMESTAMP(CAST('2026-01-02T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)",
+            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms BETWEEN UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AND UNIX_TIMESTAMP(CAST('2026-01-02T08:00:00' AS TIMESTAMP)) * 1000",
         )
 
     def test_to_sql_rewrites_epoch_millis_vs_native_timestamp_column_to_bigint(self):
@@ -153,7 +153,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms, t0.ts FROM events AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(t0.ts) * 1000 AS BIGINT)",
+            "SELECT t0.ts_ms, t0.ts FROM events AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(t0.ts) * 1000)",
         )
 
     def test_to_sql_rewrites_native_timestamp_vs_epoch_millis_column_to_bigint(self):
@@ -164,7 +164,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms, t0.ts FROM events AS t0 WHERE CAST(UNIX_TIMESTAMP(t0.ts) * 1000 AS BIGINT) <= t0.ts_ms",
+            "SELECT t0.ts_ms, t0.ts FROM events AS t0 WHERE (UNIX_TIMESTAMP(t0.ts) * 1000) <= t0.ts_ms",
         )
 
     def test_to_sql_rewrites_epoch_millis_between_native_timestamp_columns_to_bigint(self):
@@ -180,7 +180,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms, t0.lower_ts, t0.upper_ts FROM events AS t0 WHERE t0.ts_ms BETWEEN CAST(UNIX_TIMESTAMP(t0.lower_ts) * 1000 AS BIGINT) AND CAST(UNIX_TIMESTAMP(t0.upper_ts) * 1000 AS BIGINT)",
+            "SELECT t0.ts_ms, t0.lower_ts, t0.upper_ts FROM events AS t0 WHERE t0.ts_ms BETWEEN UNIX_TIMESTAMP(t0.lower_ts) * 1000 AND UNIX_TIMESTAMP(t0.upper_ts) * 1000",
         )
 
     def test_to_sql_rewrites_dynamic_epoch_millis_timestamp_comparison_to_bigint(self):
@@ -194,7 +194,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(CAST(CONCAT(TO_CHAR(CAST(CURRENT_TIMESTAMP AS DATE), 'YYYY-MM-DD'), ' 09:00:00') AS TIMESTAMP)) * 1000 AS BIGINT)",
+            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(CAST(CONCAT(TO_CHAR(CAST(CURRENT_TIMESTAMP AS DATE), 'YYYY-MM-DD'), ' 09:00:00') AS TIMESTAMP)) * 1000)",
         )
 
     def test_to_sql_leaves_native_timestamp_comparison_unchanged(self):
@@ -275,24 +275,14 @@ class TimeCompilerTest(unittest.TestCase):
         expr = metrics.select(metrics.ts_ms.cast("timestamp").name("ts"))
 
         compiled = compile_expr(expr)
-        cast = compiled.find(sge.Cast)
-
-        self.assertIsNotNone(cast)
-        self.assertEqual(cast.to.this, sge.DataType.Type.TIMESTAMP)
+        projection = compiled.expressions[0]
+        self.assertIsInstance(projection, sge.Alias)
+        self.assertEqual(projection.alias, "ts")
+        self.assertIsInstance(projection.this, sge.Column)
+        self.assertEqual(projection.this.this.name, "ts_ms")
+        self.assertEqual(projection.this.table, "t0")
+        self.assertIsNone(compiled.find(sge.Cast))
         self.assertIsNone(compiled.find(sge.UnixToTime))
-
-        from_unixtime = next(
-            node
-            for node in compiled.find_all(sge.Anonymous)
-            if node.name.upper() == "FROM_UNIXTIME"
-        )
-        division = from_unixtime.expressions[0]
-
-        self.assertIsInstance(division, sge.Div)
-        self.assertIsInstance(division.this, sge.Column)
-        self.assertEqual(division.this.this.name, "ts_ms")
-        self.assertEqual(division.this.table, "t0")
-        self.assertEqual(division.expression, sge.convert(1000))
 
     def test_compile_rewrites_epoch_millis_timestamp_comparison_to_bigint_comparison(
         self,
@@ -310,9 +300,7 @@ class TimeCompilerTest(unittest.TestCase):
         self.assertEqual(comparison.this.this.name, "ts_ms")
         self.assertEqual(comparison.this.table, "t0")
         self.assertIsNone(compiled.find(sge.UnixToTime))
-        self.assertIsInstance(comparison.expression, sge.Cast)
-        self.assertEqual(comparison.expression.to.this, sge.DataType.Type.BIGINT)
-
+        self.assertIsInstance(comparison.expression, sge.Paren)
         multiply = comparison.expression.this
         self.assertIsInstance(multiply, sge.Mul)
         self.assertEqual(multiply.expression, sge.convert(1000))
@@ -332,9 +320,7 @@ class TimeCompilerTest(unittest.TestCase):
         self.assertIsInstance(comparison.this, sge.Column)
         self.assertEqual(comparison.this.this.name, "ts_ms")
         self.assertEqual(comparison.this.table, "t0")
-        self.assertIsInstance(comparison.expression, sge.Cast)
-        self.assertEqual(comparison.expression.to.this, sge.DataType.Type.BIGINT)
-
+        self.assertIsInstance(comparison.expression, sge.Paren)
         multiply = comparison.expression.this
         self.assertIsInstance(multiply, sge.Mul)
         unix_timestamp = multiply.this
@@ -364,8 +350,9 @@ class TimeCompilerTest(unittest.TestCase):
         self.assertIsInstance(comparison.this, sge.Column)
         self.assertEqual(comparison.this.this.name, "ts_ms")
         self.assertEqual(comparison.this.table, "t0")
-        self.assertIsInstance(projection.this, sge.Cast)
-        self.assertEqual(projection.this.to.this, sge.DataType.Type.TIMESTAMP)
+        self.assertIsInstance(projection.this, sge.Column)
+        self.assertEqual(projection.this.this.name, "ts_ms")
+        self.assertEqual(projection.this.table, "t0")
 
     def test_compile_rejects_timezone_aware_timestamp_in_epoch_millis_comparison(self):
         events = ibis.table(
