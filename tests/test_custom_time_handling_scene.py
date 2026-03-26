@@ -34,7 +34,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(CAST(CONCAT(CONCAT(CONCAT(CONCAT(CAST(2026 AS STRING), '-'), LPAD(CAST(1 AS STRING), 2, '0')), '-'), LPAD(CAST(3 AS STRING), 2, '0')) AS DATE)) * 1000)",
+            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(CAST('2026-01-03' AS DATE)) * 1000)",
         )
 
     def test_date_from_parts_of_native_timestamp_column(self):
@@ -46,7 +46,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= CAST(CONCAT(CONCAT(CONCAT(CONCAT(CAST(2026 AS STRING), '-'), LPAD(CAST(1 AS STRING), 2, '0')), '-'), LPAD(CAST(3 AS STRING), 2, '0')) AS DATE)",
+            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= CAST('2026-01-03' AS DATE)",
         )
 
     def test_timestamp_from_parts_of_mutate_timestamp_column(self):
@@ -58,7 +58,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(CAST(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CAST(2026 AS STRING), '-'), LPAD(CAST(1 AS STRING), 2, '0')), '-'), LPAD(CAST(3 AS STRING), 2, '0')), ' '), LPAD(CAST(10 AS STRING), 2, '0')), ':'), LPAD(CAST(30 AS STRING), 2, '0')), ':'), LPAD(CAST(0 AS STRING), 2, '0')) AS TIMESTAMP)) * 1000)",
+            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(CAST('2026-01-03 10:30:00' AS TIMESTAMP)) * 1000)",
         )
 
     def test_timestamp_from_parts_of_native_timestamp_column(self):
@@ -70,7 +70,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= CAST(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CAST(2026 AS STRING), '-'), LPAD(CAST(1 AS STRING), 2, '0')), '-'), LPAD(CAST(3 AS STRING), 2, '0')), ' '), LPAD(CAST(10 AS STRING), 2, '0')), ':'), LPAD(CAST(30 AS STRING), 2, '0')), ':'), LPAD(CAST(0 AS STRING), 2, '0')) AS TIMESTAMP)",
+            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= CAST('2026-01-03 10:30:00' AS TIMESTAMP)",
         )
 
     def test_time_to_string_of_mutate_timestamp_column(self):
@@ -200,7 +200,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.name FROM (SELECT t1.name, t1.ts FROM (SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP)) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2",
+            "SELECT t2.name FROM (SELECT t1.name, t1.ts FROM (SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2",
         )
 
     def test_truncate_week_of_native_timestamp_column(self):
@@ -212,5 +212,5 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t1.name FROM (SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= DATE_TRUNC('WEEK', CURRENT_TIMESTAMP) AND t0.ts < CURRENT_TIMESTAMP) AS t1",
+            "SELECT t1.name FROM (SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= (DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY) AND t0.ts < CURRENT_TIMESTAMP) AS t1",
         )

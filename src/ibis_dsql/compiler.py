@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import date as pydate
+from datetime import datetime as pydatetime
+from decimal import Decimal
+
 import ibis.expr.operations as ops
 import ibis.expr.datatypes as dt
 import ibis.common.exceptions as com
@@ -359,6 +363,30 @@ class DSQLCompiler(PostgresCompiler):
         seconds = self.binop(sge.Div, arg, sge.convert(1000))
         return self.cast(sg.func("FROM_UNIXTIME", seconds), to)
 
+    @staticmethod
+    def _literal_node_value(node: ops.Node):
+        return node.value if isinstance(node, ops.Literal) else None
+
+    @staticmethod
+    def _coerce_timestamp_parts(second_value) -> tuple[int, int]:
+        second_decimal = Decimal(str(second_value))
+        second_int = int(second_decimal)
+        micros = int((second_decimal - second_int) * Decimal("1000000"))
+        if micros >= 1000000:
+            second_int += 1
+            micros -= 1000000
+        return second_int, micros
+
+    @staticmethod
+    def _day_interval() -> sge.Interval:
+        return sge.Interval(this=sge.Literal.string("1"), unit=sge.Var(this="DAY"))
+
+    def _monday_week_start(self, arg: sge.Expression) -> sge.Expression:
+        day_interval = self._day_interval()
+        shifted = self.binop(sge.Sub, arg.copy(), day_interval.copy())
+        week_start = self.f.date_trunc("week", shifted)
+        return self.binop(sge.Add, week_start, day_interval)
+
     def _concat_sql(self, *parts: sge.Expression) -> sge.Expression:
         return sg.func("CONCAT", *parts)
 
@@ -520,6 +548,16 @@ class DSQLCompiler(PostgresCompiler):
         return super().visit_DefaultLiteral(op, value=value, dtype=dtype)
 
     def visit_DateFromYMD(self, op, *, year, month, day):
+        if all(
+            isinstance(node, ops.Literal) for node in (op.year, op.month, op.day)
+        ):
+            literal_date = pydate(
+                int(self._literal_node_value(op.year)),
+                int(self._literal_node_value(op.month)),
+                int(self._literal_node_value(op.day)),
+            )
+            return self.cast(literal_date.isoformat(), dt.date)
+
         date_text = self._concat_sql(
             self._stringify_sql(year),
             sge.Literal.string("-"),
@@ -530,6 +568,27 @@ class DSQLCompiler(PostgresCompiler):
         return self.cast(date_text, dt.date)
 
     def visit_TimestampFromYMDHMS(self, op, *, year, month, day, hours, minutes, seconds):
+        if all(
+            isinstance(node, ops.Literal)
+            for node in (op.year, op.month, op.day, op.hours, op.minutes, op.seconds)
+        ):
+            second_int, microseconds = self._coerce_timestamp_parts(
+                self._literal_node_value(op.seconds)
+            )
+            literal_timestamp = pydatetime(
+                int(self._literal_node_value(op.year)),
+                int(self._literal_node_value(op.month)),
+                int(self._literal_node_value(op.day)),
+                int(self._literal_node_value(op.hours)),
+                int(self._literal_node_value(op.minutes)),
+                second_int,
+                microseconds,
+            )
+            return self.cast(
+                self._format_temporal_literal(literal_timestamp, is_timestamp=True),
+                dt.timestamp,
+            )
+
         timestamp_text = self._concat_sql(
             self._stringify_sql(year),
             sge.Literal.string("-"),
@@ -583,6 +642,8 @@ class DSQLCompiler(PostgresCompiler):
 
     def visit_TimestampTruncate(self, op, *, arg, unit):
         arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        if unit.short == "W":
+            return self._monday_week_start(arg)
         return super().visit_TimestampTruncate(op, arg=arg, unit=unit)
 
     def visit_Equals(self, op, *, left, right):

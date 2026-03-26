@@ -73,7 +73,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.name FROM (SELECT t1.ts, t1.name FROM (SELECT t0.ts AS ts, t0.name FROM alarm AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP)) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2",
+            "SELECT t2.name FROM (SELECT t1.ts, t1.name FROM (SELECT t0.ts AS ts, t0.name FROM alarm AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2",
         )
 
     def test_to_sql_supports_same_name_mutated_epoch_millis_temporal_transforms(self):
@@ -90,7 +90,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS d, DATE_TRUNC('WEEK', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tw, DATE_TRUNC('MONTH', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tm, TO_CHAR(CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP), 'YYYY-MM-DD') AS s FROM alarm AS t0",
+            "SELECT DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS d, DATE_TRUNC('WEEK', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP) - INTERVAL '1' DAY) + INTERVAL '1' DAY AS tw, DATE_TRUNC('MONTH', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tm, TO_CHAR(CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP), 'YYYY-MM-DD') AS s FROM alarm AS t0",
         )
 
     def test_to_sql_supports_same_name_mutated_epoch_millis_common_extracts(self):
@@ -439,6 +439,13 @@ class TimeCompilerTest(unittest.TestCase):
         self.assertEqual(greater_equal.this.table, "t1")
         self.assertIsInstance(greater_equal.expression, sge.Paren)
         self.assertIsInstance(greater_equal.expression.this, sge.Mul)
+        unix_timestamp = greater_equal.expression.this.this
+        self.assertIsInstance(unix_timestamp, sge.Anonymous)
+        self.assertEqual(unix_timestamp.name.upper(), "UNIX_TIMESTAMP")
+        monday_week_start = unix_timestamp.expressions[0]
+        self.assertIsInstance(monday_week_start, sge.Add)
+        self.assertIsInstance(monday_week_start.this, sge.TimestampTrunc)
+        self.assertIsInstance(monday_week_start.this.this, sge.Sub)
 
         self.assertIsNotNone(less)
         self.assertIsInstance(less.this, sge.Column)

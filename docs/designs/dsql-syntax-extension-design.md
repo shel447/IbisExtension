@@ -268,7 +268,7 @@ DSQL 时间处理当前有两类入口：
 
 - `CAST(FROM_UNIXTIME(col / 1000) AS TIMESTAMP)`
 
-这个 helper 只在真正需要时间值的上下文使用，例如 `date()`、`truncate()`、`strftime()`、`extract`、`interval` 算术和排序。其中 `date()` 在 DSQL 下统一序列化成 `DATE_TRUNC('DAY', ...)`。
+这个 helper 只在真正需要时间值的上下文使用，例如 `date()`、`truncate()`、`strftime()`、`extract`、`interval` 算术和排序。其中 `date()` 在 DSQL 下统一序列化成 `DATE_TRUNC('DAY', ...)`，`truncate("week")` 则统一按“周一到周日”口径生成周起始。
 
 第三类是毫秒化简。内部 helper `_operand_to_epoch_millis` 负责把比较表达式里的时间操作数统一改写成毫秒数：
 
@@ -307,7 +307,7 @@ DSQL 时间处理当前有两类入口：
 然后再继续生成：
 
 - `DATE_TRUNC('DAY', ...)`
-- `DATE_TRUNC('WEEK', ...)`
+- 周一开周的 `truncate("week")`
 - `EXTRACT(hour FROM ...)`
 
 这样可以保证分组、投影和聚合仍然按真正的时间语义运行。
@@ -370,7 +370,7 @@ DSQL 时间处理当前有两类入口：
 
 如果另一侧本身也是同样的 `epoch-ms` cast，则直接还原为原始 long 列比较。
 如果另一侧是无时区原生 `timestamp` 列，则将其换算为 `UNIX_TIMESTAMP(col) * 1000` 后再比较。
-如果另一侧是“日期部件拼接后 `CAST(... AS DATE)`”或 `DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL ...` 这类日期表达式，也统一先按时间表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒。
+如果另一侧是“日期部件折叠后的 `CAST('YYYY-MM-DD' AS DATE)` / 动态部件拼接后 `CAST(... AS DATE)`”或 `DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL ...` 这类日期表达式，也统一先按时间表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒。
 如果是“同名 `mutate` 暴露出来的时间列”，也沿关系值继续追溯到源 `epoch-ms` 规范 cast，确保比较优化不会因为中间 `Field` 包装而失效。
 如果命中的是带时区 `timestamp`，立即抛出 `UnsupportedSyntaxException`，避免在未定义时区口径下静默生成 SQL。
 
@@ -378,9 +378,10 @@ DSQL 时间处理当前有两类入口：
 
 - 时间字符串按本地时间格式解释，例如 `'2026-01-01 08:00:00'` 表示本地时间早上 8 点
 - DSQL 下 timestamp literal 统一输出为空格分隔格式，例如 `CAST('2026-01-28 01:00:00' AS TIMESTAMP)`，中间不使用 `T`
-- `ibis.date(year, month, day)` 统一编译为“拼接 `YYYY-MM-DD` 字符串后 `CAST(... AS DATE)`”
-- `ibis.timestamp(year, month, day, hour, minute, second)` 统一编译为“拼接 `YYYY-MM-DD HH:MM:SS` 字符串后 `CAST(... AS TIMESTAMP)`”
+- `ibis.date(year, month, day)` 在年月日都是常量时，直接在编译期折叠为 `CAST('YYYY-MM-DD' AS DATE)`；只有动态部件才回退到 SQL 侧拼接
+- `ibis.timestamp(year, month, day, hour, minute, second)` 在各部件都是常量时，直接折叠为 `CAST('YYYY-MM-DD HH:MM:SS' AS TIMESTAMP)`；只有动态部件才回退到 SQL 侧拼接
 - 直接日期字面量例如 `ibis.date('2026-01-01')` 直接编译为 `CAST('2026-01-01' AS DATE)`，不再走 `MAKE_DATE(...)`
+- 自然周统一定义为周一到周日；当前实现只收敛 `truncate("week")` 相关路径，`week_of_year()` 和 `weekday()` 暂不跟随本轮调整
 - 由 `strftime`、字符串拼接等方式构造出的 timestamp 表达式，先按正常 timestamp 语义生成，再在比较优化中统一通过 `UNIX_TIMESTAMP(...) * 1000` 换算成 long
 - 无时区原生 `timestamp` 列在混合比较中按当前会话/本地时间口径经 `UNIX_TIMESTAMP(...)` 换算成毫秒
 - 带时区 `timestamp` 列本轮不参与这条优化路径，统一视为待后续专题支持
