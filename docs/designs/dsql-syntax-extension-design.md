@@ -391,7 +391,7 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 - `start_with` 中的 `EXISTS (...)`
 - 派生表输入上的 `CONNECT BY`
 - `optimize=True` 下的 `CONNECT BY` 稳定输出
-- `mutate(ts=ts_ms.cast("timestamp"))` 后继续 `filter/select`
+- `mutate(ts_ms=ts_ms.cast("timestamp"))` 后继续 `filter/select`
 - `mutate` 出来的时间列继续做 `date()` / `truncate()`
 - 原生 `timestamp` 列的 `select/order_by/+ interval` 保持原生 SQL
 - 原生 `timestamp` 列继续做 `date()` / `truncate()`

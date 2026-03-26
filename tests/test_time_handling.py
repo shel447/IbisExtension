@@ -24,36 +24,36 @@ class TimeSqlTest(unittest.TestCase):
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_filter_and_select(self):
         metrics = ibis.table([("ts_ms", "int64"), ("value", "int64")], name="metrics")
-        base = metrics.mutate(ts=metrics.ts_ms.cast("timestamp"))
-        expr = base.filter(base.ts >= ibis.timestamp("2026-01-01 08:00:00")).select(
-            base.ts, base.value
+        base = metrics.mutate(ts_ms=metrics.ts_ms.cast("timestamp"))
+        expr = base.filter(base.ts_ms >= ibis.timestamp("2026-01-01 08:00:00")).select(
+            base.ts_ms, base.value
         )
 
         sql = to_sql(expr)
 
         self.assertEqual(
             sql,
-            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)",
+            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts_ms, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_date_filter(self):
         metrics = ibis.table([("ts_ms", "int64"), ("value", "int64")], name="metrics")
-        base = metrics.mutate(ts=metrics.ts_ms.cast("timestamp"))
-        expr = base.filter(base.ts.date() == ibis.date("2026-01-01")).select(
-            base.ts, base.value
+        base = metrics.mutate(ts_ms=metrics.ts_ms.cast("timestamp"))
+        expr = base.filter(base.ts_ms.date() == ibis.date("2026-01-01")).select(
+            base.ts_ms, base.value
         )
 
         sql = to_sql(expr)
 
         self.assertEqual(
             sql,
-            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts, t0.value FROM metrics AS t0 WHERE DATE(CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = MAKE_DATE(2026, 1, 1)",
+            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts_ms, t0.value FROM metrics AS t0 WHERE DATE(CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = MAKE_DATE(2026, 1, 1)",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_truncate_select(self):
         metrics = ibis.table([("ts_ms", "int64")], name="metrics")
-        base = metrics.mutate(ts=metrics.ts_ms.cast("timestamp"))
-        expr = base.select(base.ts.truncate("D").name("d"))
+        base = metrics.mutate(ts_ms=metrics.ts_ms.cast("timestamp"))
+        expr = base.select(base.ts_ms.truncate("D").name("d"))
 
         sql = to_sql(expr)
 
@@ -347,9 +347,9 @@ class TimeCompilerTest(unittest.TestCase):
 
     def test_compile_rewrites_mutated_epoch_millis_timestamp_filter_to_bigint(self):
         metrics = ibis.table([("ts_ms", "int64"), ("value", "int64")], name="metrics")
-        base = metrics.mutate(ts=metrics.ts_ms.cast("timestamp"))
-        expr = base.filter(base.ts >= ibis.timestamp("2026-01-01 08:00:00")).select(
-            base.ts, base.value
+        base = metrics.mutate(ts_ms=metrics.ts_ms.cast("timestamp"))
+        expr = base.filter(base.ts_ms >= ibis.timestamp("2026-01-01 08:00:00")).select(
+            base.ts_ms, base.value
         )
 
         compiled = compile_expr(expr)
@@ -357,7 +357,7 @@ class TimeCompilerTest(unittest.TestCase):
         projection = next(
             node
             for node in compiled.expressions
-            if isinstance(node, sge.Alias) and node.alias == "ts"
+            if isinstance(node, sge.Alias) and node.alias == "ts_ms"
         )
 
         self.assertIsNotNone(comparison)
