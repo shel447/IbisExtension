@@ -34,7 +34,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(MAKE_DATE(CAST(2026 AS INT), CAST(1 AS INT), CAST(3 AS INT))) * 1000)",
+            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(CAST(CONCAT(CONCAT(CONCAT(CONCAT(CAST(2026 AS STRING), '-'), LPAD(CAST(1 AS STRING), 2, '0')), '-'), LPAD(CAST(3 AS STRING), 2, '0')) AS DATE)) * 1000)",
         )
 
     def test_date_from_parts_of_native_timestamp_column(self):
@@ -46,7 +46,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= MAKE_DATE(CAST(2026 AS INT), CAST(1 AS INT), CAST(3 AS INT))",
+            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= CAST(CONCAT(CONCAT(CONCAT(CONCAT(CAST(2026 AS STRING), '-'), LPAD(CAST(1 AS STRING), 2, '0')), '-'), LPAD(CAST(3 AS STRING), 2, '0')) AS DATE)",
         )
 
     def test_timestamp_from_parts_of_mutate_timestamp_column(self):
@@ -58,7 +58,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(MAKE_TIMESTAMP(CAST(2026 AS INT), CAST(1 AS INT), CAST(3 AS INT), CAST(10 AS INT), CAST(30 AS INT), CAST(0 AS DOUBLE))) * 1000)",
+            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(CAST(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CAST(2026 AS STRING), '-'), LPAD(CAST(1 AS STRING), 2, '0')), '-'), LPAD(CAST(3 AS STRING), 2, '0')), ' '), LPAD(CAST(10 AS STRING), 2, '0')), ':'), LPAD(CAST(30 AS STRING), 2, '0')), ':'), LPAD(CAST(0 AS STRING), 2, '0')) AS TIMESTAMP)) * 1000)",
         )
 
     def test_timestamp_from_parts_of_native_timestamp_column(self):
@@ -70,7 +70,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= MAKE_TIMESTAMP(CAST(2026 AS INT), CAST(1 AS INT), CAST(3 AS INT), CAST(10 AS INT), CAST(30 AS INT), CAST(0 AS DOUBLE))",
+            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= CAST(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CONCAT(CAST(2026 AS STRING), '-'), LPAD(CAST(1 AS STRING), 2, '0')), '-'), LPAD(CAST(3 AS STRING), 2, '0')), ' '), LPAD(CAST(10 AS STRING), 2, '0')), ':'), LPAD(CAST(30 AS STRING), 2, '0')), ':'), LPAD(CAST(0 AS STRING), 2, '0')) AS TIMESTAMP)",
         )
 
     def test_time_to_string_of_mutate_timestamp_column(self):
@@ -173,7 +173,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t3.day, t3.cnt FROM (SELECT DATE(CAST(FROM_UNIXTIME(CAST(t2.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS day, COUNT(*) AS cnt FROM (SELECT t1.name, t1.ts FROM (SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE(CURRENT_TIMESTAMP) - INTERVAL '5' DAY) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2 GROUP BY 1) AS t3 ORDER BY t3.day ASC",
+            "SELECT t3.day, t3.cnt FROM (SELECT DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t2.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS day, COUNT(*) AS cnt FROM (SELECT t1.name, t1.ts FROM (SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL '5' DAY) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2 GROUP BY 1) AS t3 ORDER BY t3.day ASC",
         )
 
     def test_truncate_date_of_native_timestamp_column(self):
@@ -188,7 +188,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.day, t2.cnt FROM (SELECT DATE(t1.ts) AS day, COUNT(*) AS cnt FROM (SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= (DATE(CURRENT_TIMESTAMP) - INTERVAL '5' DAY) AND t0.ts < CURRENT_TIMESTAMP) AS t1 GROUP BY 1) AS t2 ORDER BY t2.day ASC",
+            "SELECT t2.day, t2.cnt FROM (SELECT DATE_TRUNC('DAY', t1.ts) AS day, COUNT(*) AS cnt FROM (SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= (DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL '5' DAY) AND t0.ts < CURRENT_TIMESTAMP) AS t1 GROUP BY 1) AS t2 ORDER BY t2.day ASC",
         )
 
     def test_truncate_week_of_mutate_timestamp_column(self):

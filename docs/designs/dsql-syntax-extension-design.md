@@ -256,7 +256,7 @@ DSQL 时间处理当前有两类入口：
 
 过滤比较又是另一类需求。对 `epoch-ms` 规范链来说，如果仍然保留 `CAST(FROM_UNIXTIME(...))` 再比较，会把原始 long 列包进时间函数里，不利于利用底层 long 语义。因此只要能确认一侧来自 `epoch-ms -> timestamp`，另一侧属于日期或时间表达式，就把比较统一改写成 long 毫秒比较。
 
-分组和聚合之所以单独强调，是因为真实业务里经常出现 `filter(...).group_by(_.ts.date()).aggregate(...)` 这类串联写法。这里既有比较，又有时间函数，如果不把两条路径分开处理，就容易出现“过滤已经回到 long，分组却变成 `DATE(raw_int64)`”这类混乱结果。
+分组和聚合之所以单独强调，是因为真实业务里经常出现 `filter(...).group_by(_.ts.date()).aggregate(...)` 这类串联写法。这里既有比较，又有时间函数，如果不把两条路径分开处理，就容易出现“过滤已经回到 long，分组却落成错误的日期函数形态”这类混乱结果。
 
 #### 5.6.3 实现层
 
@@ -268,7 +268,7 @@ DSQL 时间处理当前有两类入口：
 
 - `CAST(FROM_UNIXTIME(col / 1000) AS TIMESTAMP)`
 
-这个 helper 只在真正需要时间值的上下文使用，例如 `date()`、`truncate()`、`strftime()`、`extract`、`interval` 算术和排序。
+这个 helper 只在真正需要时间值的上下文使用，例如 `date()`、`truncate()`、`strftime()`、`extract`、`interval` 算术和排序。其中 `date()` 在 DSQL 下统一序列化成 `DATE_TRUNC('DAY', ...)`。
 
 第三类是毫秒化简。内部 helper `_operand_to_epoch_millis` 负责把比较表达式里的时间操作数统一改写成毫秒数：
 
@@ -306,7 +306,7 @@ DSQL 时间处理当前有两类入口：
 
 然后再继续生成：
 
-- `DATE(...)`
+- `DATE_TRUNC('DAY', ...)`
 - `DATE_TRUNC('WEEK', ...)`
 - `EXTRACT(hour FROM ...)`
 
@@ -370,7 +370,7 @@ DSQL 时间处理当前有两类入口：
 
 如果另一侧本身也是同样的 `epoch-ms` cast，则直接还原为原始 long 列比较。
 如果另一侧是无时区原生 `timestamp` 列，则将其换算为 `UNIX_TIMESTAMP(col) * 1000` 后再比较。
-如果另一侧是 `MAKE_DATE(...)`、`DATE(CURRENT_TIMESTAMP) - INTERVAL ...` 这类日期表达式，也统一先按时间表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒。
+如果另一侧是“日期部件拼接后 `CAST(... AS DATE)`”或 `DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL ...` 这类日期表达式，也统一先按时间表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒。
 如果是“同名 `mutate` 暴露出来的时间列”，也沿关系值继续追溯到源 `epoch-ms` 规范 cast，确保比较优化不会因为中间 `Field` 包装而失效。
 如果命中的是带时区 `timestamp`，立即抛出 `UnsupportedSyntaxException`，避免在未定义时区口径下静默生成 SQL。
 
@@ -378,6 +378,9 @@ DSQL 时间处理当前有两类入口：
 
 - 时间字符串按本地时间格式解释，例如 `'2026-01-01 08:00:00'` 表示本地时间早上 8 点
 - DSQL 下 timestamp literal 统一输出为空格分隔格式，例如 `CAST('2026-01-28 01:00:00' AS TIMESTAMP)`，中间不使用 `T`
+- `ibis.date(year, month, day)` 统一编译为“拼接 `YYYY-MM-DD` 字符串后 `CAST(... AS DATE)`”
+- `ibis.timestamp(year, month, day, hour, minute, second)` 统一编译为“拼接 `YYYY-MM-DD HH:MM:SS` 字符串后 `CAST(... AS TIMESTAMP)`”
+- 直接日期字面量例如 `ibis.date('2026-01-01')` 直接编译为 `CAST('2026-01-01' AS DATE)`，不再走 `MAKE_DATE(...)`
 - 由 `strftime`、字符串拼接等方式构造出的 timestamp 表达式，先按正常 timestamp 语义生成，再在比较优化中统一通过 `UNIX_TIMESTAMP(...) * 1000` 换算成 long
 - 无时区原生 `timestamp` 列在混合比较中按当前会话/本地时间口径经 `UNIX_TIMESTAMP(...)` 换算成毫秒
 - 带时区 `timestamp` 列本轮不参与这条优化路径，统一视为待后续专题支持

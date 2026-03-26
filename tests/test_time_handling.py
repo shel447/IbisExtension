@@ -47,7 +47,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms AS ts_ms, t0.value FROM metrics AS t0 WHERE DATE(CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = MAKE_DATE(2026, 1, 1)",
+            "SELECT t0.ts_ms AS ts_ms, t0.value FROM metrics AS t0 WHERE DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = CAST('2026-01-01' AS DATE)",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_truncate_select(self):
@@ -90,7 +90,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT DATE(CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS d, DATE_TRUNC('WEEK', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tw, DATE_TRUNC('MONTH', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tm, TO_CHAR(CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP), 'YYYY-MM-DD') AS s FROM alarm AS t0",
+            "SELECT DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS d, DATE_TRUNC('WEEK', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tw, DATE_TRUNC('MONTH', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tm, TO_CHAR(CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP), 'YYYY-MM-DD') AS s FROM alarm AS t0",
         )
 
     def test_to_sql_supports_same_name_mutated_epoch_millis_common_extracts(self):
@@ -270,7 +270,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT DATE(t0.ts) AS d, DATE_TRUNC('DAY', t0.ts) AS td, t0.value FROM events AS t0",
+            "SELECT DATE_TRUNC('DAY', t0.ts) AS d, DATE_TRUNC('DAY', t0.ts) AS td, t0.value FROM events AS t0",
         )
 
     def test_to_sql_supports_native_timestamp_common_extracts(self):

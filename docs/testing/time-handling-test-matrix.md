@@ -30,18 +30,18 @@
 | `epoch-ms` 混合原生时间列比较 | 与原生无时区 `timestamp` 列双向比较 | `test_to_sql_rewrites_epoch_millis_vs_native_timestamp_column_to_bigint` / `test_to_sql_rewrites_native_timestamp_vs_epoch_millis_column_to_bigint` |
 | `epoch-ms` 原生时间列区间 | `epoch-ms` 与原生 `timestamp` 下界/上界混合 `BETWEEN` | `test_to_sql_rewrites_epoch_millis_between_native_timestamp_columns_to_bigint` |
 | `epoch-ms` 过滤后再投影 | `mutate` 后过滤，再把同名时间列直接投影回原始 long | `test_to_sql_supports_mutated_epoch_millis_timestamp_filter_and_select` |
-| `epoch-ms` 日期过滤 | `date()` 过滤保留时间语义 | `test_to_sql_supports_mutated_epoch_millis_timestamp_date_filter` |
+| `epoch-ms` 日期过滤 | `date()` 过滤保留时间语义，并统一输出 `DATE_TRUNC('DAY', ...)` | `test_to_sql_supports_mutated_epoch_millis_timestamp_date_filter` |
 | `epoch-ms` 截断投影 | `truncate("D")` 投影保留时间语义 | `test_to_sql_supports_mutated_epoch_millis_timestamp_truncate_select` |
 | `epoch-ms` 排序 | `order_by(cast("timestamp"))` 保留时间语义 | `test_to_sql_compiles_epoch_millis_cast_to_timestamp_in_order_by` |
 | `epoch-ms` 时间算术 | `+/- INTERVAL` 保留时间语义 | `test_to_sql_preserves_interval_arithmetic_for_epoch_millis_timestamps` |
 | 同名 `mutate` 比较 | `mutate(ts=ts.cast("timestamp"))` 后与 `now()/truncate()` 比较，右侧换算毫秒 | `test_to_sql_rewrites_same_name_mutated_epoch_millis_week_range_filter` |
-| 同名 `mutate` 时间变换 | `date()/truncate()/strftime()` 保留时间语义 | `test_to_sql_supports_same_name_mutated_epoch_millis_temporal_transforms` |
+| 同名 `mutate` 时间变换 | `date()/truncate()/strftime()` 保留时间语义，其中 `date()` 输出 `DATE_TRUNC('DAY', ...)` | `test_to_sql_supports_same_name_mutated_epoch_millis_temporal_transforms` |
 | 同名 `mutate` 时间提取 | `year/month/day/hour/minute/second` 保留时间语义 | `test_to_sql_supports_same_name_mutated_epoch_millis_common_extracts` |
 | 原生 `timestamp` 直接投影 | 直接 `select` 保持原生 SQL | `test_to_sql_leaves_native_timestamp_select_unchanged` |
 | 原生 `timestamp` 排序 | `order_by` 保持原生 SQL | `test_to_sql_leaves_native_timestamp_order_by_unchanged` |
 | 原生 `timestamp` 比较 | 与 timestamp 字面量比较保持原生语义 | `test_to_sql_leaves_native_timestamp_comparison_unchanged` |
 | 原生 `timestamp` 时间算术 | `+/- INTERVAL` 保持原生语义 | `test_to_sql_leaves_native_timestamp_interval_arithmetic_unchanged` |
-| 原生 `timestamp` 日期与截断 | `date()/truncate()` 保持原生语义 | `test_to_sql_supports_native_timestamp_date_and_truncate_select` / `test_to_sql_supports_native_timestamp_truncate_filter` |
+| 原生 `timestamp` 日期与截断 | `date()/truncate()` 保持原生语义，其中 `date()` 也统一为 `DATE_TRUNC('DAY', ...)` | `test_to_sql_supports_native_timestamp_date_and_truncate_select` / `test_to_sql_supports_native_timestamp_truncate_filter` |
 | 原生 `timestamp` 时间提取 | `year/month/day/hour/minute/second` 保持原生语义 | `test_to_sql_supports_native_timestamp_common_extracts` |
 | 异常边界 | 带时区 `timestamp('UTC')` 进入 `epoch-ms` 时间优化时报错 | `test_to_sql_rejects_timezone_aware_timestamp_in_epoch_millis_comparison` / `test_to_sql_rejects_timezone_aware_timestamp_in_epoch_millis_between` |
 
@@ -62,18 +62,18 @@
 
 | 列类型 | 场景 | 预期编译策略 | 对应测试名 |
 | --- | --- | --- | --- |
-| `epoch-ms mutate timestamp` | `date from parts` 作为过滤下界 | 右侧 `MAKE_DATE(...)` 先按日期表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒比较 | `test_date_from_parts_of_mutate_timestamp_column` |
-| 原生 `timestamp` | `date from parts` 作为过滤下界 | 保持原生时间比较，不做毫秒化简 | `test_date_from_parts_of_native_timestamp_column` |
-| `epoch-ms mutate timestamp` | `timestamp from parts` 作为过滤下界 | 右侧 `MAKE_TIMESTAMP(...)` 换算成毫秒，左侧回到原始 long 列 | `test_timestamp_from_parts_of_mutate_timestamp_column` |
-| 原生 `timestamp` | `timestamp from parts` 作为过滤下界 | 保持原生 `timestamp >= MAKE_TIMESTAMP(...)` | `test_timestamp_from_parts_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `date from parts` 作为过滤下界 | 右侧先拼接 `YYYY-MM-DD` 字符串并 `CAST(... AS DATE)`，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒比较 | `test_date_from_parts_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `date from parts` 作为过滤下界 | 右侧先拼接 `YYYY-MM-DD` 字符串并 `CAST(... AS DATE)`，整体保持原生时间比较 | `test_date_from_parts_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `timestamp from parts` 作为过滤下界 | 右侧先拼接 `YYYY-MM-DD HH:MM:SS` 字符串并 `CAST(... AS TIMESTAMP)`，再换算成毫秒，左侧回到原始 long 列 | `test_timestamp_from_parts_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `timestamp from parts` 作为过滤下界 | 保持原生 `timestamp >= CAST(CONCAT(...) AS TIMESTAMP)` | `test_timestamp_from_parts_of_native_timestamp_column` |
 | `epoch-ms mutate timestamp` | `strftime -> timestamp` 构造时间字符串再比较 | 先保留字符串到 timestamp 的时间语义，再在比较处整体换算成毫秒 | `test_time_to_string_of_mutate_timestamp_column` |
 | 原生 `timestamp` | `strftime -> timestamp` 构造时间字符串再比较 | 保持原生 `CAST(TO_CHAR(...) AS TIMESTAMP)` 比较 | `test_time_to_string_of_native_timestamp_column` |
 | `epoch-ms mutate timestamp` | `extract hour + group by` | `hour()` 先恢复为 timestamp 再 `EXTRACT`，过滤仍走毫秒比较 | `test_extract_hour_of_mutate_timestamp_column` |
 | 原生 `timestamp` | `extract hour + group by` | 原生列直接 `EXTRACT(hour FROM ts)` | `test_extract_hour_of_native_timestamp_column` |
 | `epoch-ms mutate timestamp` | `between` | 两个边界都换算成毫秒，不再出现 `CAST(... AS BIGINT)` | `test_time_between_of_mutate_timestamp_column` |
 | 原生 `timestamp` | `between` | 保持原生 `BETWEEN timestamp AND timestamp` | `test_time_between_of_native_timestamp_column` |
-| `epoch-ms mutate timestamp` | `rolling N days + group by date` | 过滤条件两端换算成毫秒，`date()` 分组前恢复为 timestamp | `test_truncate_date_of_mutate_timestamp_column` |
-| 原生 `timestamp` | `rolling N days + group by date` | 保持原生 `DATE(ts)` 分组与原生时间比较 | `test_truncate_date_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `rolling N days + group by date` | 过滤条件两端换算成毫秒，`date()` 分组前恢复为 timestamp，并输出 `DATE_TRUNC('DAY', ...)` | `test_truncate_date_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `rolling N days + group by date` | 保持原生时间比较，分组统一输出 `DATE_TRUNC('DAY', ts)` | `test_truncate_date_of_native_timestamp_column` |
 | `epoch-ms mutate timestamp` | `truncate week range` | `truncate(\"week\")` 结果换算成毫秒后参与比较 | `test_truncate_week_of_mutate_timestamp_column` |
 | 原生 `timestamp` | `truncate week range` | 保持原生 `DATE_TRUNC('WEEK', ...)` 比较 | `test_truncate_week_of_native_timestamp_column` |
 

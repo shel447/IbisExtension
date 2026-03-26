@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ibis.expr.operations as ops
+import ibis.expr.datatypes as dt
 import ibis.common.exceptions as com
 from ibis.backends.sql.compilers.postgres import PostgresCompiler
 import sqlglot as sg
@@ -358,6 +359,36 @@ class DSQLCompiler(PostgresCompiler):
         seconds = self.binop(sge.Div, arg, sge.convert(1000))
         return self.cast(sg.func("FROM_UNIXTIME", seconds), to)
 
+    def _concat_sql(self, *parts: sge.Expression) -> sge.Expression:
+        return sg.func("CONCAT", *parts)
+
+    def _stringify_sql(self, expression: sge.Expression) -> sge.Expression:
+        return self.cast(expression.copy(), dt.string)
+
+    def _zero_pad_sql_part(self, expression: sge.Expression, width: int = 2) -> sge.Expression:
+        return sg.func(
+            "LPAD",
+            self._stringify_sql(expression),
+            sge.convert(width),
+            sge.Literal.string("0"),
+        )
+
+    def _timestamp_second_sql_part(
+        self, operand: ops.Node, expression: sge.Expression
+    ) -> sge.Expression:
+        if operand.dtype.is_integer():
+            return self._zero_pad_sql_part(expression, 2)
+
+        second_text = self._stringify_sql(expression)
+        if operand.dtype.is_floating():
+            return self.if_(
+                self.binop(sge.LT, expression.copy(), sge.convert(10)),
+                self._concat_sql(sge.Literal.string("0"), second_text.copy()),
+                second_text,
+            )
+
+        return second_text
+
     def _unwrap_epoch_millis_timestamp(self, expression: sge.Expression) -> sge.Expression | None:
         if not isinstance(expression, sge.Cast):
             return None
@@ -480,15 +511,43 @@ class DSQLCompiler(PostgresCompiler):
         return super().visit_Cast(op, arg=arg, to=to)
 
     def visit_DefaultLiteral(self, op, *, value, dtype):
+        if dtype.is_date():
+            return self.cast(value.isoformat(), dtype)
         if dtype.is_timestamp():
             return self.cast(self._format_temporal_literal(value, is_timestamp=True), dtype)
         if dtype.is_time():
             return self.cast(self._format_temporal_literal(value, is_timestamp=False), dtype)
         return super().visit_DefaultLiteral(op, value=value, dtype=dtype)
 
+    def visit_DateFromYMD(self, op, *, year, month, day):
+        date_text = self._concat_sql(
+            self._stringify_sql(year),
+            sge.Literal.string("-"),
+            self._zero_pad_sql_part(month, 2),
+            sge.Literal.string("-"),
+            self._zero_pad_sql_part(day, 2),
+        )
+        return self.cast(date_text, dt.date)
+
+    def visit_TimestampFromYMDHMS(self, op, *, year, month, day, hours, minutes, seconds):
+        timestamp_text = self._concat_sql(
+            self._stringify_sql(year),
+            sge.Literal.string("-"),
+            self._zero_pad_sql_part(month, 2),
+            sge.Literal.string("-"),
+            self._zero_pad_sql_part(day, 2),
+            sge.Literal.string(" "),
+            self._zero_pad_sql_part(hours, 2),
+            sge.Literal.string(":"),
+            self._zero_pad_sql_part(minutes, 2),
+            sge.Literal.string(":"),
+            self._timestamp_second_sql_part(op.seconds, seconds),
+        )
+        return self.cast(timestamp_text, dt.timestamp)
+
     def visit_Date(self, op, *, arg):
         arg = self._restore_epoch_millis_timestamp(op.arg, arg)
-        return self.f.date(arg)
+        return self.f.date_trunc("day", arg)
 
     def visit_Strftime(self, op, *, arg, format_str):
         arg = self._restore_epoch_millis_timestamp(op.arg, arg)
