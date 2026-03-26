@@ -243,15 +243,20 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 #### 5.6.2 非比较场景
 
-当 `bigint/int64 -> timestamp` cast 出现在以下非比较场景时，保留“时间语义”：
+当 `bigint/int64 -> timestamp` cast 出现在非比较场景时，分两类处理：
 
-- `SELECT`
+- 顶层裸投影：如果最终只是把这类时间列直接 `SELECT` 出去，不再输出 timestamp 字符串，而是回写为原始 `bigint/int64` 列
+- 其余时间语义场景：继续保留“时间语义”
+
+保留时间语义的典型场景包括：
+
 - `ORDER BY`
-- `date()` / `truncate()` 等时间变换
+- `date()` / `truncate()` / `strftime()`
+- `year/month/day/hour/minute/second` 等提取函数
 - 时间算术，例如 `+/- INTERVAL`
-- 其它不属于比较运算的上下文
+- 其它不属于比较运算、且仍然需要按时间值解释的上下文
 
-统一输出为：
+这类场景统一输出为：
 
 - `CAST(FROM_UNIXTIME(col / 1000) AS TIMESTAMP)`
 
@@ -270,12 +275,13 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 改写规则为：
 
 - `epoch_ms_col.cast("timestamp") <op> ts_expr`
-  -> `epoch_ms_col <op> CAST(UNIX_TIMESTAMP(ts_expr) * 1000 AS BIGINT)`
+  -> `epoch_ms_col <op> (UNIX_TIMESTAMP(ts_expr) * 1000)`
 - `epoch_ms_col.cast("timestamp").between(lower_ts, upper_ts)`
-  -> `epoch_ms_col BETWEEN CAST(UNIX_TIMESTAMP(lower_ts) * 1000 AS BIGINT) AND CAST(UNIX_TIMESTAMP(upper_ts) * 1000 AS BIGINT)`
+  -> `epoch_ms_col BETWEEN UNIX_TIMESTAMP(lower_ts) * 1000 AND UNIX_TIMESTAMP(upper_ts) * 1000`
 
 如果另一侧本身也是同样的 `epoch-ms` cast，则直接还原为原始 long 列比较。
-如果另一侧是无时区原生 `timestamp` 列，则将其换算为 `CAST(UNIX_TIMESTAMP(col) * 1000 AS BIGINT)` 后再比较。
+如果另一侧是无时区原生 `timestamp` 列，则将其换算为 `UNIX_TIMESTAMP(col) * 1000` 后再比较。
+如果是“同名 `mutate` 暴露出来的时间列”，也沿关系值继续追溯到源 `epoch-ms` 规范 cast，确保比较优化不会因为中间 `Field` 包装而失效。
 如果命中的是带时区 `timestamp`，立即抛出 `UnsupportedSyntaxException`，避免在未定义时区口径下静默生成 SQL。
 
 #### 5.6.4 时间解释口径

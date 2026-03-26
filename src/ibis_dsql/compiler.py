@@ -34,6 +34,32 @@ def _is_epoch_millis_timestamp_cast(op: ops.Node) -> bool:
     )
 
 
+def _epoch_millis_source_op(
+    op: ops.Node, *, _seen: set[ops.Node] | None = None
+) -> ops.Node | None:
+    if _is_epoch_millis_timestamp_cast(op):
+        return op.arg
+
+    if not isinstance(op, ops.Field):
+        return None
+
+    if _seen is None:
+        _seen = set()
+    if op in _seen:
+        return None
+    _seen.add(op)
+
+    values = getattr(op.rel, "values", None)
+    if values is None or op.name not in values:
+        return None
+
+    value = values[op.name]
+    if value is op:
+        return None
+
+    return _epoch_millis_source_op(value, _seen=_seen)
+
+
 def _is_timestamp_datetype(dtype) -> bool:
     return dtype.is_timestamp()
 
@@ -354,6 +380,26 @@ class DSQLCompiler(PostgresCompiler):
         seconds = sg.func("UNIX_TIMESTAMP", expression.copy())
         return self.binop(sge.Mul, seconds, sge.convert(1000))
 
+    def _operand_to_epoch_millis(
+        self, operand: ops.Node, expression: sge.Expression
+    ) -> sge.Expression:
+        if _epoch_millis_source_op(operand) is not None:
+            raw = self._unwrap_epoch_millis_timestamp(expression)
+            return raw if raw is not None else expression.copy()
+
+        return self._timestamp_to_epoch_millis(expression)
+
+    def _restore_epoch_millis_timestamp(
+        self, operand: ops.Node, expression: sge.Expression
+    ) -> sge.Expression:
+        if _epoch_millis_source_op(operand) is None:
+            return expression
+
+        if self._unwrap_epoch_millis_timestamp(expression) is not None:
+            return expression
+
+        return self._epoch_millis_to_timestamp(expression.copy(), operand.dtype)
+
     def _rewrite_epoch_millis_projection(self, expression: sge.Expression) -> sge.Expression:
         if isinstance(expression, sge.Alias):
             raw = self._unwrap_epoch_millis_timestamp(expression.this)
@@ -373,7 +419,7 @@ class DSQLCompiler(PostgresCompiler):
 
     def _should_rewrite_temporal_comparison(self, left_op: ops.Node, right_op: ops.Node) -> bool:
         if not (
-            (_is_epoch_millis_timestamp_cast(left_op) or _is_epoch_millis_timestamp_cast(right_op))
+            (_epoch_millis_source_op(left_op) is not None or _epoch_millis_source_op(right_op) is not None)
             and _is_timestamp_datetype(left_op.dtype)
             and _is_timestamp_datetype(right_op.dtype)
         ):
@@ -388,8 +434,8 @@ class DSQLCompiler(PostgresCompiler):
 
         return self.binop(
             sg_cls,
-            self._timestamp_to_epoch_millis(left),
-            self._timestamp_to_epoch_millis(right),
+            self._operand_to_epoch_millis(op.left, left),
+            self._operand_to_epoch_millis(op.right, right),
         )
 
     def visit_StartsWith(self, op, *, arg, start):
@@ -417,7 +463,46 @@ class DSQLCompiler(PostgresCompiler):
         if _is_epoch_millis_timestamp_cast(op):
             return self._epoch_millis_to_timestamp(arg, to)
 
+        if op.arg.dtype.is_timestamp() and (to.is_date() or to.is_time()):
+            arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+
         return super().visit_Cast(op, arg=arg, to=to)
+
+    def visit_Strftime(self, op, *, arg, format_str):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_Strftime(op, arg=arg, format_str=format_str)
+
+    def visit_ExtractEpochSeconds(self, op, *, arg):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_ExtractEpochSeconds(op, arg=arg)
+
+    def visit_ExtractYear(self, op, *, arg):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_ExtractYear(op, arg=arg)
+
+    def visit_ExtractMonth(self, op, *, arg):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_ExtractMonth(op, arg=arg)
+
+    def visit_ExtractDay(self, op, *, arg):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_ExtractDay(op, arg=arg)
+
+    def visit_ExtractHour(self, op, *, arg):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_ExtractHour(op, arg=arg)
+
+    def visit_ExtractMinute(self, op, *, arg):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_ExtractMinute(op, arg=arg)
+
+    def visit_ExtractSecond(self, op, *, arg):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_ExtractSecond(op, arg=arg)
+
+    def visit_TimestampTruncate(self, op, *, arg, unit):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return super().visit_TimestampTruncate(op, arg=arg, unit=unit)
 
     def visit_Equals(self, op, *, left, right):
         return self._rewrite_temporal_binop(op, sge.EQ, left, right)
@@ -439,7 +524,7 @@ class DSQLCompiler(PostgresCompiler):
 
     def visit_Between(self, op, *, arg, lower_bound, upper_bound):
         if not (
-            _is_epoch_millis_timestamp_cast(op.arg)
+            _epoch_millis_source_op(op.arg) is not None
             and _is_timestamp_datetype(op.arg.dtype)
             and _is_timestamp_datetype(op.lower_bound.dtype)
             and _is_timestamp_datetype(op.upper_bound.dtype)
@@ -455,9 +540,9 @@ class DSQLCompiler(PostgresCompiler):
         )
 
         return sge.Between(
-            this=self._timestamp_to_epoch_millis(arg),
-            low=self._timestamp_to_epoch_millis(lower_bound),
-            high=self._timestamp_to_epoch_millis(upper_bound),
+            this=self._operand_to_epoch_millis(op.arg, arg),
+            low=self._operand_to_epoch_millis(op.lower_bound, lower_bound),
+            high=self._operand_to_epoch_millis(op.upper_bound, upper_bound),
         )
 
     def _star_fields(self, names, relation):

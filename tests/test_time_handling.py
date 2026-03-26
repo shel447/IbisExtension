@@ -62,6 +62,56 @@ class TimeSqlTest(unittest.TestCase):
             "SELECT DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) AS d FROM metrics AS t0",
         )
 
+    def test_to_sql_rewrites_same_name_mutated_epoch_millis_week_range_filter(self):
+        alarm = ibis.table([("ts", "int64"), ("name", "string")], name="alarm")
+        base = alarm.mutate(ts=alarm.ts.cast("timestamp"))
+        expr = base.filter(
+            (base.ts >= ibis.now().truncate("week")) & (base.ts < ibis.now())
+        ).select(base.name)
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT t2.name FROM (SELECT t1.ts, t1.name FROM (SELECT t0.ts AS ts, t0.name FROM alarm AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP)) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2",
+        )
+
+    def test_to_sql_supports_same_name_mutated_epoch_millis_temporal_transforms(self):
+        alarm = ibis.table([("ts", "int64"), ("name", "string")], name="alarm")
+        base = alarm.mutate(ts=alarm.ts.cast("timestamp"))
+        expr = base.select(
+            base.ts.date().name("d"),
+            base.ts.truncate("W").name("tw"),
+            base.ts.truncate("M").name("tm"),
+            base.ts.strftime("%Y-%m-%d").name("s"),
+        )
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT DATE(CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS d, DATE_TRUNC('WEEK', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tw, DATE_TRUNC('MONTH', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS tm, TO_CHAR(CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP), 'YYYY-MM-DD') AS s FROM alarm AS t0",
+        )
+
+    def test_to_sql_supports_same_name_mutated_epoch_millis_common_extracts(self):
+        alarm = ibis.table([("ts", "int64"), ("name", "string")], name="alarm")
+        base = alarm.mutate(ts=alarm.ts.cast("timestamp"))
+        expr = base.select(
+            base.ts.year().name("y"),
+            base.ts.month().name("m"),
+            base.ts.day().name("dd"),
+            base.ts.hour().name("hh"),
+            base.ts.minute().name("mi"),
+            base.ts.second().name("ss"),
+        )
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT EXTRACT(year FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS y, EXTRACT(month FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS m, EXTRACT(day FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS dd, EXTRACT(hour FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS hh, EXTRACT(minute FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS mi, CAST(FLOOR(EXTRACT('second' FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP))) AS INT) AS ss FROM (SELECT t0.ts AS ts, t0.name FROM alarm AS t0) AS t1",
+        )
+
     def test_to_sql_leaves_native_timestamp_select_unchanged(self):
         events = ibis.table([("ts", "timestamp")], name="events")
         expr = events.select(events.ts.name("ts2"))
@@ -223,6 +273,24 @@ class TimeSqlTest(unittest.TestCase):
             "SELECT DATE(t0.ts) AS d, DATE_TRUNC('DAY', t0.ts) AS td, t0.value FROM events AS t0",
         )
 
+    def test_to_sql_supports_native_timestamp_common_extracts(self):
+        events = ibis.table([("ts", "timestamp")], name="events")
+        expr = events.select(
+            events.ts.year().name("y"),
+            events.ts.month().name("m"),
+            events.ts.day().name("dd"),
+            events.ts.hour().name("hh"),
+            events.ts.minute().name("mi"),
+            events.ts.second().name("ss"),
+        )
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT EXTRACT(year FROM t0.ts) AS y, EXTRACT(month FROM t0.ts) AS m, EXTRACT(day FROM t0.ts) AS dd, EXTRACT(hour FROM t0.ts) AS hh, EXTRACT(minute FROM t0.ts) AS mi, CAST(FLOOR(EXTRACT('second' FROM t0.ts)) AS INT) AS ss FROM events AS t0",
+        )
+
     def test_to_sql_supports_native_timestamp_truncate_filter(self):
         events = ibis.table([("ts", "timestamp")], name="events")
         expr = events.filter(
@@ -353,6 +421,31 @@ class TimeCompilerTest(unittest.TestCase):
         self.assertIsInstance(projection.this, sge.Column)
         self.assertEqual(projection.this.this.name, "ts_ms")
         self.assertEqual(projection.this.table, "t0")
+
+    def test_compile_rewrites_same_name_mutated_epoch_millis_week_range_filter(self):
+        alarm = ibis.table([("ts", "int64"), ("name", "string")], name="alarm")
+        base = alarm.mutate(ts=alarm.ts.cast("timestamp"))
+        expr = base.filter(
+            (base.ts >= ibis.now().truncate("week")) & (base.ts < ibis.now())
+        ).select(base.name)
+
+        compiled = compile_expr(expr)
+        greater_equal = compiled.find(sge.GTE)
+        less = compiled.find(sge.LT)
+
+        self.assertIsNotNone(greater_equal)
+        self.assertIsInstance(greater_equal.this, sge.Column)
+        self.assertEqual(greater_equal.this.this.name, "ts")
+        self.assertEqual(greater_equal.this.table, "t1")
+        self.assertIsInstance(greater_equal.expression, sge.Paren)
+        self.assertIsInstance(greater_equal.expression.this, sge.Mul)
+
+        self.assertIsNotNone(less)
+        self.assertIsInstance(less.this, sge.Column)
+        self.assertEqual(less.this.this.name, "ts")
+        self.assertEqual(less.this.table, "t1")
+        self.assertIsInstance(less.expression, sge.Paren)
+        self.assertIsInstance(less.expression.this, sge.Mul)
 
     def test_compile_rejects_timezone_aware_timestamp_in_epoch_millis_comparison(self):
         events = ibis.table(
