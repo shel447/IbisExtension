@@ -64,6 +64,10 @@ def _is_timestamp_datetype(dtype) -> bool:
     return dtype.is_timestamp()
 
 
+def _is_temporal_dtype(dtype) -> bool:
+    return dtype.is_timestamp() or dtype.is_date()
+
+
 def _timestamp_timezone(dtype) -> str | None:
     if not dtype.is_timestamp():
         return None
@@ -400,6 +404,13 @@ class DSQLCompiler(PostgresCompiler):
 
         return self._epoch_millis_to_timestamp(expression.copy(), operand.dtype)
 
+    @staticmethod
+    def _format_temporal_literal(value, *, is_timestamp: bool) -> str:
+        timespec = "microseconds" if getattr(value, "microsecond", 0) else "seconds"
+        if is_timestamp:
+            return value.isoformat(sep=" ", timespec=timespec)
+        return value.isoformat(timespec=timespec)
+
     def _rewrite_epoch_millis_projection(self, expression: sge.Expression) -> sge.Expression:
         if isinstance(expression, sge.Alias):
             raw = self._unwrap_epoch_millis_timestamp(expression.this)
@@ -420,8 +431,8 @@ class DSQLCompiler(PostgresCompiler):
     def _should_rewrite_temporal_comparison(self, left_op: ops.Node, right_op: ops.Node) -> bool:
         if not (
             (_epoch_millis_source_op(left_op) is not None or _epoch_millis_source_op(right_op) is not None)
-            and _is_timestamp_datetype(left_op.dtype)
-            and _is_timestamp_datetype(right_op.dtype)
+            and _is_temporal_dtype(left_op.dtype)
+            and _is_temporal_dtype(right_op.dtype)
         ):
             return False
 
@@ -467,6 +478,17 @@ class DSQLCompiler(PostgresCompiler):
             arg = self._restore_epoch_millis_timestamp(op.arg, arg)
 
         return super().visit_Cast(op, arg=arg, to=to)
+
+    def visit_DefaultLiteral(self, op, *, value, dtype):
+        if dtype.is_timestamp():
+            return self.cast(self._format_temporal_literal(value, is_timestamp=True), dtype)
+        if dtype.is_time():
+            return self.cast(self._format_temporal_literal(value, is_timestamp=False), dtype)
+        return super().visit_DefaultLiteral(op, value=value, dtype=dtype)
+
+    def visit_Date(self, op, *, arg):
+        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+        return self.f.date(arg)
 
     def visit_Strftime(self, op, *, arg, format_str):
         arg = self._restore_epoch_millis_timestamp(op.arg, arg)
@@ -525,9 +547,9 @@ class DSQLCompiler(PostgresCompiler):
     def visit_Between(self, op, *, arg, lower_bound, upper_bound):
         if not (
             _epoch_millis_source_op(op.arg) is not None
-            and _is_timestamp_datetype(op.arg.dtype)
-            and _is_timestamp_datetype(op.lower_bound.dtype)
-            and _is_timestamp_datetype(op.upper_bound.dtype)
+            and _is_temporal_dtype(op.arg.dtype)
+            and _is_temporal_dtype(op.lower_bound.dtype)
+            and _is_temporal_dtype(op.upper_bound.dtype)
         ):
             return super().visit_Between(
                 op, arg=arg, lower_bound=lower_bound, upper_bound=upper_bound

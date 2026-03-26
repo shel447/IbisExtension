@@ -223,9 +223,98 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 - 这样可以避免 optimizer 重新解析或重排层次查询结构时破坏 DSQL 语义。
 - 对非 `CONNECT BY` 查询，仍保持现有 `optimize=True` 行为。
 
-### 5.6 `epoch-ms bigint -> timestamp` 时间语义优化
+### 5.6 时间处理总览
 
-#### 5.6.1 背景
+#### 5.6.1 概念层
+
+DSQL 时间处理当前有两类入口：
+
+- `epoch-ms bigint/int64 -> timestamp` 规范链
+- 原生无时区 `timestamp` 列
+
+第一类入口服务于业务表里“底层是 13 位 UTC 毫秒 long，但上层表达式希望按时间来写”的场景。调用方先在 Ibis 中把 long 字段 `cast("timestamp")`，后续表达式都按时间列处理；编译器再根据上下文决定最终 SQL 是继续保留时间语义，还是回落成 long 毫秒比较。
+
+第二类入口是数据库本来就有无时区 `timestamp/datetime` 字段。这类字段不需要经过 `epoch-ms` 规范链，可以直接按时间列参与过滤、分组、截断和算术。
+
+这两类入口之所以要统一放在一个模块里说明，是因为它们在“表达式层”都表现为 Ibis `timestamp`，但在“编译层”并不完全等价：
+
+- `epoch-ms` 规范链需要在必要时回到原始 long 列，保证比较效率和应用端返回值形态
+- 原生 `timestamp` 列在纯时间语义场景下则应尽量保持数据库原生写法
+
+#### 5.6.2 设计思路层
+
+整体思路可以概括为两句话：
+
+- 非比较场景优先保留时间语义
+- 比较场景在命中 `epoch-ms` 规范链时优先化简为 long 毫秒比较
+
+之所以这样拆分，是因为不同上下文的目标并不一样。
+
+顶层裸投影时，应用层真正想拿到的是原始 long 值，因此 `select(ts_ms.cast("timestamp"))` 不应该返回时间字符串，而应该回写成原始数值列。
+
+时间函数和时间算术则相反。像 `date()`、`truncate()`、`strftime()`、`year()/hour()`、`+/- interval` 这类逻辑，本质上就是在做时间运算。如果这里直接把 long 当数值处理，语义会立刻跑偏，所以必须先恢复成真正的 timestamp 表达式。
+
+过滤比较又是另一类需求。对 `epoch-ms` 规范链来说，如果仍然保留 `CAST(FROM_UNIXTIME(...))` 再比较，会把原始 long 列包进时间函数里，不利于利用底层 long 语义。因此只要能确认一侧来自 `epoch-ms -> timestamp`，另一侧属于日期或时间表达式，就把比较统一改写成 long 毫秒比较。
+
+分组和聚合之所以单独强调，是因为真实业务里经常出现 `filter(...).group_by(_.ts.date()).aggregate(...)` 这类串联写法。这里既有比较，又有时间函数，如果不把两条路径分开处理，就容易出现“过滤已经回到 long，分组却变成 `DATE(raw_int64)`”这类混乱结果。
+
+#### 5.6.3 实现层
+
+实现上主要依赖三类内部能力：
+
+第一类是关系字段追溯。对于 `mutate(ts=raw.cast("timestamp"))` 或同名 `mutate(ts=ts.cast("timestamp"))`，最终落到比较和时间函数里的往往已经不是原始 `Cast`，而是 `Field`。编译器会沿着 `Field -> relation.values[name]` 继续追溯，判断这个字段背后是不是那条 `epoch-ms -> timestamp` 规范链。
+
+第二类是时间语义恢复。内部 helper `_restore_epoch_millis_timestamp` 负责把可追溯到 `epoch-ms` 的字段恢复成：
+
+- `CAST(FROM_UNIXTIME(col / 1000) AS TIMESTAMP)`
+
+这个 helper 只在真正需要时间值的上下文使用，例如 `date()`、`truncate()`、`strftime()`、`extract`、`interval` 算术和排序。
+
+第三类是毫秒化简。内部 helper `_operand_to_epoch_millis` 负责把比较表达式里的时间操作数统一改写成毫秒数：
+
+- `epoch-ms` 规范链直接回到原始 long 列
+- 原生无时区 `timestamp` 或时间表达式改写成 `UNIX_TIMESTAMP(expr) * 1000`
+- 纯原生 `timestamp` 对纯原生 `timestamp` 的比较则不进入这条路径，保持数据库原生时间比较
+
+除此之外，还有一个看似小但实际很重要的细节：DSQL 的 timestamp literal 统一走本地格式化策略，不使用 upstream 默认的 `isoformat()` 结果。也就是说，最终 SQL 中应输出：
+
+- `CAST('2026-01-28 01:00:00' AS TIMESTAMP)`
+
+而不是：
+
+- `CAST('2026-01-28T01:00:00' AS TIMESTAMP)`
+
+#### 5.6.4 例子层
+
+例 1：顶层直接投影为什么回到 long
+
+如果表达式是 `mutate(ts=raw.cast("timestamp")).select("ts")`，业务侧最终想看到的仍然是原始毫秒数，所以顶层裸投影会直接回写成原始 `raw` 列，而不是输出时间字符串。
+
+例 2：时间比较为什么转成毫秒
+
+如果表达式是 `ts >= ibis.timestamp("2026-01-01 08:00:00")`，其中 `ts` 可追溯到 `epoch-ms -> timestamp` 规范链，则最终会编译成：
+
+- `raw_ts >= UNIX_TIMESTAMP(CAST('2026-01-01 08:00:00' AS TIMESTAMP)) * 1000`
+
+这样左侧保留原始 long 列，右侧统一换算成毫秒，比较口径明确，也避免把左侧包进时间函数。
+
+例 3：为什么 `ts.date()` / `ts.truncate("W")` / `ts.hour()` 仍然保留时间表达式
+
+这些操作不是在做“值比较”，而是在做“时间解释”。因此编译器不会把它们简单改成对 long 的数值函数，而是先恢复：
+
+- `CAST(FROM_UNIXTIME(raw_ts / 1000) AS TIMESTAMP)`
+
+然后再继续生成：
+
+- `DATE(...)`
+- `DATE_TRUNC('WEEK', ...)`
+- `EXTRACT(hour FROM ...)`
+
+这样可以保证分组、投影和聚合仍然按真正的时间语义运行。
+
+### 5.7 `epoch-ms bigint -> timestamp` 时间语义优化
+
+#### 5.7.1 背景
 
 当前业务数据表中的时间字段是 13 位 UTC 毫秒 `bigint`。为了约束大模型生成的 Ibis 表达式，调用方约定：
 
@@ -241,7 +330,7 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 带时区时间列不纳入当前范围。
 
-#### 5.6.2 非比较场景
+#### 5.7.2 非比较场景
 
 当 `bigint/int64 -> timestamp` cast 出现在非比较场景时，分两类处理：
 
@@ -262,12 +351,12 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 当前 sqlglot/Postgres generator 会把 `/ 1000` 序列化成带显式 double cast 的除法形式；这不改变语义，本轮接受该输出细节。
 
-#### 5.6.3 比较场景
+#### 5.7.3 比较场景
 
 当比较表达式满足以下条件时，改写成 long 毫秒比较：
 
 - 至少一侧是 `bigint/int64 -> timestamp` 的规范 cast
-- 两侧操作数都是 timestamp 语义
+- 两侧操作数都是日期或时间语义
 - 所涉及的 timestamp 操作数都不带 timezone
 - 覆盖 `= != > >= < <=`
 - 以及 `BETWEEN`
@@ -281,12 +370,14 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 如果另一侧本身也是同样的 `epoch-ms` cast，则直接还原为原始 long 列比较。
 如果另一侧是无时区原生 `timestamp` 列，则将其换算为 `UNIX_TIMESTAMP(col) * 1000` 后再比较。
+如果另一侧是 `MAKE_DATE(...)`、`DATE(CURRENT_TIMESTAMP) - INTERVAL ...` 这类日期表达式，也统一先按时间表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒。
 如果是“同名 `mutate` 暴露出来的时间列”，也沿关系值继续追溯到源 `epoch-ms` 规范 cast，确保比较优化不会因为中间 `Field` 包装而失效。
 如果命中的是带时区 `timestamp`，立即抛出 `UnsupportedSyntaxException`，避免在未定义时区口径下静默生成 SQL。
 
-#### 5.6.4 时间解释口径
+#### 5.7.4 时间解释口径
 
 - 时间字符串按本地时间格式解释，例如 `'2026-01-01 08:00:00'` 表示本地时间早上 8 点
+- DSQL 下 timestamp literal 统一输出为空格分隔格式，例如 `CAST('2026-01-28 01:00:00' AS TIMESTAMP)`，中间不使用 `T`
 - 由 `strftime`、字符串拼接等方式构造出的 timestamp 表达式，先按正常 timestamp 语义生成，再在比较优化中统一通过 `UNIX_TIMESTAMP(...) * 1000` 换算成 long
 - 无时区原生 `timestamp` 列在混合比较中按当前会话/本地时间口径经 `UNIX_TIMESTAMP(...)` 换算成毫秒
 - 带时区 `timestamp` 列本轮不参与这条优化路径，统一视为待后续专题支持

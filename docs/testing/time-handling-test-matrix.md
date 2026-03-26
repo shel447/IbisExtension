@@ -7,15 +7,19 @@
 - `epoch-ms bigint/int64 -> timestamp` 规范链
 - 原生无时区 `timestamp` 列
 
-测试主文件是 [test_time_handling.py](E:/code/codex_projects/IbisExtension/tests/test_time_handling.py)。
+测试文件包括：
+
+- [test_time_handling.py](E:/code/codex_projects/IbisExtension/tests/test_time_handling.py)：原子能力回归
+- [test_custom_time_handling_scene.py](E:/code/codex_projects/IbisExtension/tests/test_custom_time_handling_scene.py)：贴近业务写法的串联场景回归
 
 ## 2. 运行方式
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests.test_time_handling -v
+.\.venv\Scripts\python.exe -m unittest tests.test_custom_time_handling_scene -v
 ```
 
-## 3. SQL Golden 覆盖
+## 3. 原子能力 SQL Golden 覆盖
 
 | 场景类别 | 具体场景 | 代表测试 |
 | --- | --- | --- |
@@ -52,14 +56,42 @@
 | 同名 `mutate` 比较 | 通过 `Field -> relation.values[name]` 追溯命中 `epoch-ms` 优化 | `test_compile_rewrites_same_name_mutated_epoch_millis_week_range_filter` |
 | 异常边界 | 带时区 `timestamp` 进入优化路径时直接报错 | `test_compile_rejects_timezone_aware_timestamp_in_epoch_millis_comparison` |
 
-## 5. 当前结论
+## 5. Custom 场景覆盖
+
+### 5.1 场景矩阵
+
+| 列类型 | 场景 | 预期编译策略 | 对应测试名 |
+| --- | --- | --- | --- |
+| `epoch-ms mutate timestamp` | `date from parts` 作为过滤下界 | 右侧 `MAKE_DATE(...)` 先按日期表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒比较 | `test_date_from_parts_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `date from parts` 作为过滤下界 | 保持原生时间比较，不做毫秒化简 | `test_date_from_parts_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `timestamp from parts` 作为过滤下界 | 右侧 `MAKE_TIMESTAMP(...)` 换算成毫秒，左侧回到原始 long 列 | `test_timestamp_from_parts_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `timestamp from parts` 作为过滤下界 | 保持原生 `timestamp >= MAKE_TIMESTAMP(...)` | `test_timestamp_from_parts_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `strftime -> timestamp` 构造时间字符串再比较 | 先保留字符串到 timestamp 的时间语义，再在比较处整体换算成毫秒 | `test_time_to_string_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `strftime -> timestamp` 构造时间字符串再比较 | 保持原生 `CAST(TO_CHAR(...) AS TIMESTAMP)` 比较 | `test_time_to_string_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `extract hour + group by` | `hour()` 先恢复为 timestamp 再 `EXTRACT`，过滤仍走毫秒比较 | `test_extract_hour_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `extract hour + group by` | 原生列直接 `EXTRACT(hour FROM ts)` | `test_extract_hour_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `between` | 两个边界都换算成毫秒，不再出现 `CAST(... AS BIGINT)` | `test_time_between_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `between` | 保持原生 `BETWEEN timestamp AND timestamp` | `test_time_between_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `rolling N days + group by date` | 过滤条件两端换算成毫秒，`date()` 分组前恢复为 timestamp | `test_truncate_date_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `rolling N days + group by date` | 保持原生 `DATE(ts)` 分组与原生时间比较 | `test_truncate_date_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `truncate week range` | `truncate(\"week\")` 结果换算成毫秒后参与比较 | `test_truncate_week_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `truncate week range` | 保持原生 `DATE_TRUNC('WEEK', ...)` 比较 | `test_truncate_week_of_native_timestamp_column` |
+
+### 5.2 这批 custom 用例主要验证什么
+
+- 它们不是替代原子 UT，而是验证大模型常见生成路径在“过滤 + mutate + group by + 聚合 + order by”串联后仍然保持正确时间语义。
+- 其中 `date from parts`、`rolling N days + group by date` 暴露的是编译器真实语义问题，已经通过时间语义恢复和毫秒化简修正。
+- 其余部分用例同时锁定了 DSQL 时间字面量格式，确保最终 SQL 使用 `'YYYY-MM-DD HH:MM:SS'`，中间不出现 `'T'`。
+
+## 6. 当前结论
 
 - 直接比较场景统一落成长毫秒比较，不再生成 `CAST(... AS BIGINT)`。
 - 顶层直接投影 `epoch-ms.cast("timestamp")` 时，返回给应用的是原始 long 数值。
 - 一旦进入真正的时间语义上下文，例如 `date/truncate/strftime/extract/interval`，仍然会恢复为 timestamp 表达式再参与计算。
 - 同名 `mutate(ts=ts.cast("timestamp"))` 已单独纳入回归，避免后续修改只覆盖“改名 mutate”而漏掉真实业务写法。
+- custom 场景已覆盖从“时间部件构造”到“日期分组/周截断过滤”的常见大模型生成路径，可直接用这份矩阵判断某类场景是否已有回归。
 
-## 6. 暂未纳入本矩阵
+## 7. 暂未纳入本矩阵
 
 - 带时区 `timestamp` 的正确时区换算语义
 - `connect_by` 查询中的时间字段专题覆盖

@@ -33,7 +33,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms AS ts_ms, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000)",
+            "SELECT t0.ts_ms AS ts_ms, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(CAST('2026-01-01 08:00:00' AS TIMESTAMP)) * 1000)",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_date_filter(self):
@@ -176,7 +176,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000)",
+            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(CAST('2026-01-01 08:00:00' AS TIMESTAMP)) * 1000)",
         )
 
     def test_to_sql_rewrites_epoch_millis_timestamp_between_to_bigint(self):
@@ -192,7 +192,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms BETWEEN UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AND UNIX_TIMESTAMP(CAST('2026-01-02T08:00:00' AS TIMESTAMP)) * 1000",
+            "SELECT t0.ts_ms FROM metrics AS t0 WHERE t0.ts_ms BETWEEN UNIX_TIMESTAMP(CAST('2026-01-01 08:00:00' AS TIMESTAMP)) * 1000 AND UNIX_TIMESTAMP(CAST('2026-01-02 08:00:00' AS TIMESTAMP)) * 1000",
         )
 
     def test_to_sql_rewrites_epoch_millis_vs_native_timestamp_column_to_bigint(self):
@@ -255,7 +255,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts FROM events AS t0 WHERE t0.ts >= CAST('2026-01-01T08:00:00' AS TIMESTAMP)",
+            "SELECT t0.ts FROM events AS t0 WHERE t0.ts >= CAST('2026-01-01 08:00:00' AS TIMESTAMP)",
         )
 
     def test_to_sql_supports_native_timestamp_date_and_truncate_select(self):
@@ -301,7 +301,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts FROM events AS t0 WHERE DATE_TRUNC('DAY', t0.ts) >= CAST('2026-01-01T00:00:00' AS TIMESTAMP)",
+            "SELECT t0.ts FROM events AS t0 WHERE DATE_TRUNC('DAY', t0.ts) >= CAST('2026-01-01 00:00:00' AS TIMESTAMP)",
         )
 
     def test_to_sql_rejects_timezone_aware_timestamp_in_epoch_millis_comparison(self):
