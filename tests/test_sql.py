@@ -102,6 +102,46 @@ class SqlTest(unittest.TestCase):
             "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts FROM metrics AS t0",
         )
 
+    def test_to_sql_supports_mutated_epoch_millis_timestamp_filter_and_select(self):
+        metrics = ibis.table([("ts_ms", "int64"), ("value", "int64")], name="metrics")
+        base = metrics.mutate(ts=metrics.ts_ms.cast("timestamp"))
+        expr = base.filter(base.ts >= ibis.timestamp("2026-01-01 08:00:00")).select(
+            base.ts, base.value
+        )
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= CAST(UNIX_TIMESTAMP(CAST('2026-01-01T08:00:00' AS TIMESTAMP)) * 1000 AS BIGINT)",
+        )
+
+    def test_to_sql_supports_mutated_epoch_millis_timestamp_date_filter(self):
+        metrics = ibis.table([("ts_ms", "int64"), ("value", "int64")], name="metrics")
+        base = metrics.mutate(ts=metrics.ts_ms.cast("timestamp"))
+        expr = base.filter(base.ts.date() == ibis.date("2026-01-01")).select(
+            base.ts, base.value
+        )
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP) AS ts, t0.value FROM metrics AS t0 WHERE DATE(CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = MAKE_DATE(2026, 1, 1)",
+        )
+
+    def test_to_sql_supports_mutated_epoch_millis_timestamp_truncate_select(self):
+        metrics = ibis.table([("ts_ms", "int64")], name="metrics")
+        base = metrics.mutate(ts=metrics.ts_ms.cast("timestamp"))
+        expr = base.select(base.ts.truncate("D").name("d"))
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) AS d FROM metrics AS t0",
+        )
+
     def test_to_sql_leaves_native_timestamp_select_unchanged(self):
         events = ibis.table([("ts", "timestamp")], name="events")
         expr = events.select(events.ts.name("ts2"))
@@ -246,6 +286,34 @@ class SqlTest(unittest.TestCase):
         self.assertEqual(
             sql,
             "SELECT t0.ts FROM events AS t0 WHERE t0.ts >= CAST('2026-01-01T08:00:00' AS TIMESTAMP)",
+        )
+
+    def test_to_sql_supports_native_timestamp_date_and_truncate_select(self):
+        events = ibis.table([("ts", "timestamp"), ("value", "int64")], name="events")
+        expr = events.select(
+            events.ts.date().name("d"),
+            events.ts.truncate("D").name("td"),
+            events.value,
+        )
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT DATE(t0.ts) AS d, DATE_TRUNC('DAY', t0.ts) AS td, t0.value FROM events AS t0",
+        )
+
+    def test_to_sql_supports_native_timestamp_truncate_filter(self):
+        events = ibis.table([("ts", "timestamp")], name="events")
+        expr = events.filter(
+            events.ts.truncate("D") >= ibis.timestamp("2026-01-01 00:00:00")
+        )
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT t0.ts FROM events AS t0 WHERE DATE_TRUNC('DAY', t0.ts) >= CAST('2026-01-01T00:00:00' AS TIMESTAMP)",
         )
 
     def test_to_sql_rejects_timezone_aware_timestamp_in_epoch_millis_comparison(self):

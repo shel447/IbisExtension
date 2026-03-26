@@ -99,6 +99,26 @@ class CompilerTest(unittest.TestCase):
         self.assertEqual(native_column.this.name, "ts")
         self.assertEqual(native_column.table, "t0")
 
+    def test_compile_rewrites_mutated_epoch_millis_timestamp_filter_to_bigint(self):
+        metrics = ibis.table([("ts_ms", "int64"), ("value", "int64")], name="metrics")
+        base = metrics.mutate(ts=metrics.ts_ms.cast("timestamp"))
+        expr = base.filter(base.ts >= ibis.timestamp("2026-01-01 08:00:00")).select(
+            base.ts, base.value
+        )
+
+        compiled = compile_expr(expr)
+        comparison = compiled.find(sge.GTE)
+        projection = next(
+            node for node in compiled.expressions if isinstance(node, sge.Alias) and node.alias == "ts"
+        )
+
+        self.assertIsNotNone(comparison)
+        self.assertIsInstance(comparison.this, sge.Column)
+        self.assertEqual(comparison.this.this.name, "ts_ms")
+        self.assertEqual(comparison.this.table, "t0")
+        self.assertIsInstance(projection.this, sge.Cast)
+        self.assertEqual(projection.this.to.this, sge.DataType.Type.TIMESTAMP)
+
     def test_compile_rejects_timezone_aware_timestamp_in_epoch_millis_comparison(self):
         events = ibis.table(
             [("ts_ms", "int64"), ("ts_utc", ibis.dtype("timestamp('UTC')"))],

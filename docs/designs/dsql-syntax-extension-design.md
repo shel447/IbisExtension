@@ -230,10 +230,16 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 当前业务数据表中的时间字段是 13 位 UTC 毫秒 `bigint`。为了约束大模型生成的 Ibis 表达式，调用方约定：
 
 - 先把 long 字段 `cast("timestamp")`
+- 再通过 `mutate()` 等关系级投影把它暴露成后续可复用的时间列
 - 后续一律按时间类型继续写表达式
 - 编译器负责把这条规范链翻译成符合 DSQL 语义且尽量高效的 SQL
 
-本轮以这条规范链为主，同时补齐它与无时区原生 `timestamp` 表字段的混合比较；带时区时间列不纳入当前范围。
+本轮以这条规范链为主，同时覆盖两种真实入口：
+
+- `int64/bigint` 字段先经 `mutate(... cast("timestamp"))` 暴露为时间列，再参与后续时间逻辑
+- 表中原生无时区 `timestamp` 列直接参与后续时间逻辑
+
+带时区时间列不纳入当前范围。
 
 #### 5.6.2 非比较场景
 
@@ -241,6 +247,7 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 
 - `SELECT`
 - `ORDER BY`
+- `date()` / `truncate()` 等时间变换
 - 时间算术，例如 `+/- INTERVAL`
 - 其它不属于比较运算的上下文
 
@@ -384,7 +391,10 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
 - `start_with` 中的 `EXISTS (...)`
 - 派生表输入上的 `CONNECT BY`
 - `optimize=True` 下的 `CONNECT BY` 稳定输出
+- `mutate(ts=ts_ms.cast("timestamp"))` 后继续 `filter/select`
+- `mutate` 出来的时间列继续做 `date()` / `truncate()`
 - 原生 `timestamp` 列的 `select/order_by/+ interval` 保持原生 SQL
+- 原生 `timestamp` 列继续做 `date()` / `truncate()`
 - `epoch-ms.cast("timestamp")` 与无时区原生 `timestamp` 列的双向比较
 - `epoch-ms.cast("timestamp").between(native_lower, native_upper)`
 
