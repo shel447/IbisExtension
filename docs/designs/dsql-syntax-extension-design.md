@@ -276,9 +276,9 @@ DSQL 时间处理当前有两类入口：
 - 原生无时区 `timestamp` 或时间表达式改写成 `UNIX_TIMESTAMP(expr) * 1000`
 - 纯原生 `timestamp` 对纯原生 `timestamp` 的比较则不进入这条路径，保持数据库原生时间比较
 
-除此之外，还有一个看似小但实际很重要的细节：DSQL 的 timestamp literal 统一走本地格式化策略，不使用 upstream 默认的 `isoformat()` 结果。也就是说，最终 SQL 中应输出：
+除此之外，还有一个看似小但实际很重要的细节：DSQL 的日期/时间字面量统一走本地格式化策略，不使用 upstream 默认的 `isoformat()` 结果；对于“完整的日期字符串”和“完整的日期时间字符串”，DSQL 允许直接把字符串字面量当成日期/时间值使用，因此不再额外包显式 `CAST`。也就是说，最终 SQL 中应输出：
 
-- `CAST('2026-01-28 01:00:00' AS TIMESTAMP)`
+- `'2026-01-28 01:00:00'`
 
 而不是：
 
@@ -294,7 +294,7 @@ DSQL 时间处理当前有两类入口：
 
 如果表达式是 `ts >= ibis.timestamp("2026-01-01 08:00:00")`，其中 `ts` 可追溯到 `epoch-ms -> timestamp` 规范链，则最终会编译成：
 
-- `raw_ts >= UNIX_TIMESTAMP(CAST('2026-01-01 08:00:00' AS TIMESTAMP)) * 1000`
+- `raw_ts >= UNIX_TIMESTAMP('2026-01-01 08:00:00') * 1000`
 
 这样左侧保留原始 long 列，右侧统一换算成毫秒，比较口径明确，也避免把左侧包进时间函数。
 
@@ -370,17 +370,17 @@ DSQL 时间处理当前有两类入口：
 
 如果另一侧本身也是同样的 `epoch-ms` cast，则直接还原为原始 long 列比较。
 如果另一侧是无时区原生 `timestamp` 列，则将其换算为 `UNIX_TIMESTAMP(col) * 1000` 后再比较。
-如果另一侧是“日期部件折叠后的 `CAST('YYYY-MM-DD' AS DATE)` / 动态部件拼接后 `CAST(... AS DATE)`”或 `DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL ...` 这类日期表达式，也统一先按时间表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒。
+如果另一侧是“日期部件折叠后的 `'YYYY-MM-DD'` / 动态部件拼接后 `CAST(... AS DATE)`”或 `DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL ...` 这类日期表达式，也统一先按时间表达式生成，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒。
 如果是“同名 `mutate` 暴露出来的时间列”，也沿关系值继续追溯到源 `epoch-ms` 规范 cast，确保比较优化不会因为中间 `Field` 包装而失效。
 如果命中的是带时区 `timestamp`，立即抛出 `UnsupportedSyntaxException`，避免在未定义时区口径下静默生成 SQL。
 
 #### 5.7.4 时间解释口径
 
 - 时间字符串按本地时间格式解释，例如 `'2026-01-01 08:00:00'` 表示本地时间早上 8 点
-- DSQL 下 timestamp literal 统一输出为空格分隔格式，例如 `CAST('2026-01-28 01:00:00' AS TIMESTAMP)`，中间不使用 `T`
-- `ibis.date(year, month, day)` 在年月日都是常量时，直接在编译期折叠为 `CAST('YYYY-MM-DD' AS DATE)`；只有动态部件才回退到 SQL 侧拼接
-- `ibis.timestamp(year, month, day, hour, minute, second)` 在各部件都是常量时，直接折叠为 `CAST('YYYY-MM-DD HH:MM:SS' AS TIMESTAMP)`；只有动态部件才回退到 SQL 侧拼接
-- 直接日期字面量例如 `ibis.date('2026-01-01')` 直接编译为 `CAST('2026-01-01' AS DATE)`，不再走 `MAKE_DATE(...)`
+- DSQL 下完整日期/时间字面量统一输出为空格分隔格式，中间不使用 `T`；对完整日期字符串和完整日期时间字符串，不再额外包 `CAST`
+- `ibis.date(year, month, day)` 在年月日都是常量时，直接在编译期折叠为 `'YYYY-MM-DD'`；只有动态部件才回退到 SQL 侧拼接并显式 `CAST(... AS DATE)`
+- `ibis.timestamp(year, month, day, hour, minute, second)` 在各部件都是常量时，直接折叠为 `'YYYY-MM-DD HH:MM:SS'`；只有动态部件才回退到 SQL 侧拼接并显式 `CAST(... AS TIMESTAMP)`
+- 直接日期字面量例如 `ibis.date('2026-01-01')` 直接编译为 `'2026-01-01'`，不再走 `MAKE_DATE(...)`
 - 自然周统一定义为周一到周日；当前实现只收敛 `truncate("week")` 相关路径，`week_of_year()` 和 `weekday()` 暂不跟随本轮调整
 - 由 `strftime`、字符串拼接等方式构造出的 timestamp 表达式，先按正常 timestamp 语义生成，再在比较优化中统一通过 `UNIX_TIMESTAMP(...) * 1000` 换算成 long
 - 无时区原生 `timestamp` 列在混合比较中按当前会话/本地时间口径经 `UNIX_TIMESTAMP(...)` 换算成毫秒

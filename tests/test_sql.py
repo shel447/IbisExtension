@@ -153,7 +153,7 @@ class SqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT CAST('2024-01-01 00:00:00' AS TIMESTAMP) + INTERVAL '1' DAY AS x FROM users AS t0",
+            "SELECT '2024-01-01 00:00:00' + INTERVAL '1' DAY AS x FROM users AS t0",
         )
 
     def test_to_sql_rewrites_position_to_instr(self):

@@ -62,10 +62,10 @@
 
 | 列类型 | 场景 | 预期编译策略 | 对应测试名 |
 | --- | --- | --- | --- |
-| `epoch-ms mutate timestamp` | `date from parts` 作为过滤下界 | 常量部件直接在编译期折叠为 `CAST('YYYY-MM-DD' AS DATE)`，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒比较；动态部件才回退到 SQL 拼接 | `test_date_from_parts_of_mutate_timestamp_column` |
-| 原生 `timestamp` | `date from parts` 作为过滤下界 | 常量部件直接折叠为 `CAST('YYYY-MM-DD' AS DATE)`，整体保持原生时间比较 | `test_date_from_parts_of_native_timestamp_column` |
-| `epoch-ms mutate timestamp` | `timestamp from parts` 作为过滤下界 | 常量部件直接折叠为 `CAST('YYYY-MM-DD HH:MM:SS' AS TIMESTAMP)`，再换算成毫秒，左侧回到原始 long 列 | `test_timestamp_from_parts_of_mutate_timestamp_column` |
-| 原生 `timestamp` | `timestamp from parts` 作为过滤下界 | 常量部件直接折叠为 `CAST('YYYY-MM-DD HH:MM:SS' AS TIMESTAMP)`，整体保持原生时间比较 | `test_timestamp_from_parts_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `date from parts` 作为过滤下界 | 常量部件直接在编译期折叠为 `'YYYY-MM-DD'`，再通过 `UNIX_TIMESTAMP(...) * 1000` 换算成毫秒比较；动态部件才回退到 SQL 拼接 | `test_date_from_parts_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `date from parts` 作为过滤下界 | 常量部件直接折叠为 `'YYYY-MM-DD'`，整体保持原生时间比较 | `test_date_from_parts_of_native_timestamp_column` |
+| `epoch-ms mutate timestamp` | `timestamp from parts` 作为过滤下界 | 常量部件直接折叠为 `'YYYY-MM-DD HH:MM:SS'`，再换算成毫秒，左侧回到原始 long 列 | `test_timestamp_from_parts_of_mutate_timestamp_column` |
+| 原生 `timestamp` | `timestamp from parts` 作为过滤下界 | 常量部件直接折叠为 `'YYYY-MM-DD HH:MM:SS'`，整体保持原生时间比较 | `test_timestamp_from_parts_of_native_timestamp_column` |
 | `epoch-ms mutate timestamp` | `strftime -> timestamp` 构造时间字符串再比较 | 先保留字符串到 timestamp 的时间语义，再在比较处整体换算成毫秒 | `test_time_to_string_of_mutate_timestamp_column` |
 | 原生 `timestamp` | `strftime -> timestamp` 构造时间字符串再比较 | 保持原生 `CAST(TO_CHAR(...) AS TIMESTAMP)` 比较 | `test_time_to_string_of_native_timestamp_column` |
 | `epoch-ms mutate timestamp` | `extract hour + group by` | `hour()` 先恢复为 timestamp 再 `EXTRACT`，过滤仍走毫秒比较 | `test_extract_hour_of_mutate_timestamp_column` |
@@ -81,7 +81,7 @@
 
 - 它们不是替代原子 UT，而是验证大模型常见生成路径在“过滤 + mutate + group by + 聚合 + order by”串联后仍然保持正确时间语义。
 - 其中 `date from parts`、`rolling N days + group by date` 暴露的是编译器真实语义问题，已经通过时间语义恢复和毫秒化简修正。
-- 其余部分用例同时锁定了 DSQL 时间字面量格式，确保最终 SQL 使用 `'YYYY-MM-DD HH:MM:SS'`，中间不出现 `'T'`。
+- 其余部分用例同时锁定了 DSQL 时间字面量格式，确保最终 SQL 对完整日期/时间字符串直接输出 `'YYYY-MM-DD'` / `'YYYY-MM-DD HH:MM:SS'`，中间不出现 `'T'`，也不额外包显式 `CAST`。
 
 ## 6. 当前结论
 

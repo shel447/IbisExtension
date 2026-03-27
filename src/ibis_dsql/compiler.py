@@ -470,6 +470,10 @@ class DSQLCompiler(PostgresCompiler):
             return value.isoformat(sep=" ", timespec=timespec)
         return value.isoformat(timespec=timespec)
 
+    @staticmethod
+    def _string_literal(value: str) -> sge.Literal:
+        return sge.Literal.string(value)
+
     def _rewrite_epoch_millis_projection(self, expression: sge.Expression) -> sge.Expression:
         if isinstance(expression, sge.Alias):
             raw = self._unwrap_epoch_millis_timestamp(expression.this)
@@ -540,9 +544,11 @@ class DSQLCompiler(PostgresCompiler):
 
     def visit_DefaultLiteral(self, op, *, value, dtype):
         if dtype.is_date():
-            return self.cast(value.isoformat(), dtype)
+            return self._string_literal(value.isoformat())
         if dtype.is_timestamp():
-            return self.cast(self._format_temporal_literal(value, is_timestamp=True), dtype)
+            return self._string_literal(
+                self._format_temporal_literal(value, is_timestamp=True)
+            )
         if dtype.is_time():
             return self.cast(self._format_temporal_literal(value, is_timestamp=False), dtype)
         return super().visit_DefaultLiteral(op, value=value, dtype=dtype)
@@ -556,7 +562,7 @@ class DSQLCompiler(PostgresCompiler):
                 int(self._literal_node_value(op.month)),
                 int(self._literal_node_value(op.day)),
             )
-            return self.cast(literal_date.isoformat(), dt.date)
+            return self._string_literal(literal_date.isoformat())
 
         date_text = self._concat_sql(
             self._stringify_sql(year),
@@ -584,9 +590,8 @@ class DSQLCompiler(PostgresCompiler):
                 second_int,
                 microseconds,
             )
-            return self.cast(
+            return self._string_literal(
                 self._format_temporal_literal(literal_timestamp, is_timestamp=True),
-                dt.timestamp,
             )
 
         timestamp_text = self._concat_sql(
