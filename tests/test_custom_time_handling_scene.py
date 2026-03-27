@@ -34,7 +34,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP('2026-01-03') * 1000)",
+            "SELECT t0.name, t0.ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP('2026-01-03') * 1000)",
         )
 
     def test_date_from_parts_of_native_timestamp_column(self):
@@ -58,7 +58,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP('2026-01-03 10:30:00') * 1000)",
+            "SELECT t0.name, t0.ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP('2026-01-03 10:30:00') * 1000)",
         )
 
     def test_timestamp_from_parts_of_native_timestamp_column(self):
@@ -84,7 +84,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.name, t2.ts FROM (SELECT t1.name, t1.ts FROM (SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(CAST(TO_CHAR(CURRENT_TIMESTAMP - INTERVAL '1' DAY, 'YYYY-MM-DD') AS TIMESTAMP)) * 1000)) AS t2",
+            "SELECT t0.name, t0.ts FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP(CAST(TO_CHAR(CURRENT_TIMESTAMP - INTERVAL '1' DAY, 'YYYY-MM-DD') AS TIMESTAMP)) * 1000)",
         )
 
     def test_time_to_string_of_native_timestamp_column(self):
@@ -98,7 +98,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t1.name, t1.ts FROM (SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= CAST(TO_CHAR(CURRENT_TIMESTAMP - INTERVAL '1' DAY, 'YYYY-MM-DD') AS TIMESTAMP)) AS t1",
+            "SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= CAST(TO_CHAR(CURRENT_TIMESTAMP - INTERVAL '1' DAY, 'YYYY-MM-DD') AS TIMESTAMP)",
         )
 
     def test_extract_hour_of_mutate_timestamp_column(self):
@@ -114,7 +114,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.hour, t2.cnt FROM (SELECT t1.hour, COUNT(*) AS cnt FROM (SELECT t0.name, t0.ts AS ts, EXTRACT(hour FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS hour FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP('2026-01-28 01:00:00') * 1000)) AS t1 GROUP BY 1) AS t2 ORDER BY t2.hour ASC",
+            "SELECT EXTRACT(hour FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS hour, COUNT(*) AS cnt FROM TableInt64 AS t0 WHERE t0.ts >= (UNIX_TIMESTAMP('2026-01-28 01:00:00') * 1000) GROUP BY EXTRACT(hour FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) ORDER BY hour",
         )
 
     def test_extract_hour_of_native_timestamp_column(self):
@@ -130,7 +130,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.hour, t2.cnt FROM (SELECT t1.hour, COUNT(*) AS cnt FROM (SELECT t0.name, t0.ts, EXTRACT(hour FROM t0.ts) AS hour FROM TableTimestamp AS t0 WHERE t0.ts >= '2026-01-28 01:00:00') AS t1 GROUP BY 1) AS t2 ORDER BY t2.hour ASC",
+            "SELECT EXTRACT(hour FROM t0.ts) AS hour, COUNT(*) AS cnt FROM TableTimestamp AS t0 WHERE t0.ts >= '2026-01-28 01:00:00' GROUP BY EXTRACT(hour FROM t0.ts) ORDER BY hour",
         )
 
     def test_time_between_of_mutate_timestamp_column(self):
@@ -144,7 +144,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0 WHERE t0.ts BETWEEN UNIX_TIMESTAMP('2026-01-28 01:00:00') * 1000 AND UNIX_TIMESTAMP('2026-01-28 09:00:00') * 1000",
+            "SELECT t0.name, t0.ts FROM TableInt64 AS t0 WHERE t0.ts BETWEEN UNIX_TIMESTAMP('2026-01-28 01:00:00') * 1000 AND UNIX_TIMESTAMP('2026-01-28 09:00:00') * 1000",
         )
 
     def test_time_between_of_native_timestamp_column(self):
@@ -173,7 +173,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t3.day, t3.cnt FROM (SELECT DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t2.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS day, COUNT(*) AS cnt FROM (SELECT t1.name, t1.ts FROM (SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL '5' DAY) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2 GROUP BY 1) AS t3 ORDER BY t3.day ASC",
+            "SELECT DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS day, COUNT(*) AS cnt FROM TableInt64 AS t0 WHERE t0.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000) AND t0.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL '5' DAY) * 1000) GROUP BY DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) ORDER BY day",
         )
 
     def test_truncate_date_of_native_timestamp_column(self):
@@ -188,7 +188,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.day, t2.cnt FROM (SELECT DATE_TRUNC('DAY', t1.ts) AS day, COUNT(*) AS cnt FROM (SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= (DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL '5' DAY) AND t0.ts < CURRENT_TIMESTAMP) AS t1 GROUP BY 1) AS t2 ORDER BY t2.day ASC",
+            "SELECT DATE_TRUNC('DAY', t0.ts) AS day, COUNT(*) AS cnt FROM TableTimestamp AS t0 WHERE t0.ts < CURRENT_TIMESTAMP AND t0.ts >= (DATE_TRUNC('DAY', CURRENT_TIMESTAMP) - INTERVAL '5' DAY) GROUP BY DATE_TRUNC('DAY', t0.ts) ORDER BY day",
         )
 
     def test_truncate_week_of_mutate_timestamp_column(self):
@@ -200,7 +200,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.name FROM (SELECT t1.name, t1.ts FROM (SELECT t0.name, t0.ts AS ts FROM TableInt64 AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2",
+            "SELECT t0.name FROM TableInt64 AS t0 WHERE t0.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000) AND t0.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY) * 1000)",
         )
 
     def test_truncate_week_of_native_timestamp_column(self):
@@ -212,5 +212,5 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t1.name FROM (SELECT t0.name, t0.ts FROM TableTimestamp AS t0 WHERE t0.ts >= (DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY) AND t0.ts < CURRENT_TIMESTAMP) AS t1",
+            "SELECT t0.name FROM TableTimestamp AS t0 WHERE t0.ts < CURRENT_TIMESTAMP AND t0.ts >= (DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY)",
         )

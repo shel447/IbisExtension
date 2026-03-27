@@ -33,7 +33,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms AS ts_ms, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP('2026-01-01 08:00:00') * 1000)",
+            "SELECT t0.ts_ms, t0.value FROM metrics AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP('2026-01-01 08:00:00') * 1000)",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_date_filter(self):
@@ -47,7 +47,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms AS ts_ms, t0.value FROM metrics AS t0 WHERE DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = '2026-01-01'",
+            "SELECT t0.ts_ms, t0.value FROM metrics AS t0 WHERE DATE_TRUNC('DAY', CAST(FROM_UNIXTIME(CAST(t0.ts_ms AS DOUBLE) / 1000) AS TIMESTAMP)) = '2026-01-01'",
         )
 
     def test_to_sql_supports_mutated_epoch_millis_timestamp_truncate_select(self):
@@ -73,7 +73,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t2.name FROM (SELECT t1.ts, t1.name FROM (SELECT t0.ts AS ts, t0.name FROM alarm AS t0) AS t1 WHERE t1.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY) * 1000) AND t1.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000)) AS t2",
+            "SELECT t0.name FROM alarm AS t0 WHERE t0.ts < (UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000) AND t0.ts >= (UNIX_TIMESTAMP(DATE_TRUNC('WEEK', CURRENT_TIMESTAMP - INTERVAL '1' DAY) + INTERVAL '1' DAY) * 1000)",
         )
 
     def test_to_sql_supports_same_name_mutated_epoch_millis_temporal_transforms(self):
@@ -109,7 +109,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT EXTRACT(year FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS y, EXTRACT(month FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS m, EXTRACT(day FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS dd, EXTRACT(hour FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS hh, EXTRACT(minute FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS mi, CAST(FLOOR(EXTRACT('second' FROM CAST(FROM_UNIXTIME(CAST(t1.ts AS DOUBLE) / 1000) AS TIMESTAMP))) AS INT) AS ss FROM (SELECT t0.ts AS ts, t0.name FROM alarm AS t0) AS t1",
+            "SELECT EXTRACT(year FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS y, EXTRACT(month FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS m, EXTRACT(day FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS dd, EXTRACT(hour FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS hh, EXTRACT(minute FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP)) AS mi, CAST(FLOOR(EXTRACT('second' FROM CAST(FROM_UNIXTIME(CAST(t0.ts AS DOUBLE) / 1000) AS TIMESTAMP))) AS INT) AS ss FROM alarm AS t0",
         )
 
     def test_to_sql_leaves_native_timestamp_select_unchanged(self):
@@ -214,7 +214,7 @@ class TimeSqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.ts_ms, t0.ts FROM events AS t0 WHERE (UNIX_TIMESTAMP(t0.ts) * 1000) <= t0.ts_ms",
+            "SELECT t0.ts_ms, t0.ts FROM events AS t0 WHERE t0.ts_ms >= (UNIX_TIMESTAMP(t0.ts) * 1000)",
         )
 
     def test_to_sql_rewrites_epoch_millis_between_native_timestamp_columns_to_bigint(self):

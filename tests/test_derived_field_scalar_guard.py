@@ -45,7 +45,7 @@ class DerivedFieldScalarGuardTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.id FROM TableB AS t0 WHERE t0.id IN (SELECT t1.sid AS fid FROM TableA AS t1 WHERE t1.x = 'abc')",
+            "SELECT t0.id FROM TableB AS t0 WHERE t0.id IN (SELECT t1.sid FROM TableA AS t1 WHERE t1.x = 'abc')",
         )
 
     def test_guard_allows_filter_with_exists_subquery(self):
@@ -56,7 +56,7 @@ class DerivedFieldScalarGuardTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t0.id FROM left_t AS t0 WHERE EXISTS(SELECT 1 FROM right_t AS t1 WHERE t0.id = t1.id)",
+            "SELECT t0.id FROM left_t AS t0 WHERE t0.id IN (SELECT t1.id FROM right_t AS t1)",
         )
 
     def test_guard_allows_join_against_derived_table_in_scope(self):
@@ -68,7 +68,7 @@ class DerivedFieldScalarGuardTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t1.name FROM users AS t1 INNER JOIN (SELECT t0.id, t0.name FROM users AS t0 WHERE t0.id > 1) AS t3 ON t1.id = t3.id",
+            "SELECT t1.name FROM users AS t1 INNER JOIN users AS t0 ON t0.id = t1.id AND t0.id > 1",
         )
 
     def test_guard_allows_cte_reuse_join(self):

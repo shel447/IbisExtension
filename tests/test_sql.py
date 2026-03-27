@@ -103,7 +103,7 @@ class SqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT t1.name, t1.total FROM (SELECT t0.name, SUM(t0.score) AS total FROM users AS t0 GROUP BY 1) AS t1 WHERE t1.total > 10",
+            "WITH t1 AS (SELECT t0.name, SUM(t0.score) AS total FROM users AS t0 GROUP BY t0.name) SELECT t1.name, t1.total FROM t1 WHERE t1.total > 10",
         )
 
     def test_to_sql_supports_join_queries(self):
@@ -153,7 +153,7 @@ class SqlTest(unittest.TestCase):
 
         self.assertEqual(
             sql,
-            "SELECT '2024-01-01 00:00:00' + INTERVAL '1' DAY AS x FROM users AS t0",
+            "SELECT CAST('2024-01-02 00:00:00' AS TIMESTAMP) AS x FROM users AS t0",
         )
 
     def test_to_sql_rewrites_position_to_instr(self):
@@ -254,7 +254,29 @@ class SqlTest(unittest.TestCase):
 
         self.assertEqual(
             optimized.sql(dialect=DSQLDialect),
-            "SELECT t0.id AS id FROM users AS t0 WHERE t0.id > 1",
+            "SELECT t0.id FROM users AS t0 WHERE t0.id > 1",
+        )
+
+    def test_to_sql_optimizes_by_default(self):
+        users = ibis.table([("id", "int64")], name="users")
+        expr = users.filter(ibis.literal(True) & (users.id > 1))
+
+        sql = to_sql(expr)
+
+        self.assertEqual(
+            sql,
+            "SELECT t0.id FROM users AS t0 WHERE t0.id > 1",
+        )
+
+    def test_to_sql_ignores_optimize_false_and_still_optimizes(self):
+        users = ibis.table([("id", "int64")], name="users")
+        expr = users.filter(ibis.literal(True) & (users.id > 1))
+
+        sql = to_sql(expr, optimize=False)
+
+        self.assertEqual(
+            sql,
+            "SELECT t0.id FROM users AS t0 WHERE t0.id > 1",
         )
 
     def test_dsql_overrides_postgres_function_and_type_output(self):

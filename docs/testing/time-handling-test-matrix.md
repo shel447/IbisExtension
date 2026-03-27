@@ -83,6 +83,18 @@
 - 其中 `date from parts`、`rolling N days + group by date` 暴露的是编译器真实语义问题，已经通过时间语义恢复和毫秒化简修正。
 - 其余部分用例同时锁定了 DSQL 时间字面量格式，确保最终 SQL 对完整日期/时间字符串直接输出 `'YYYY-MM-DD'` / `'YYYY-MM-DD HH:MM:SS'`，中间不出现 `'T'`，也不额外包显式 `CAST`。
 
+### 5.3 optimizer 影响覆盖
+
+这部分不是新增一套独立功能，而是用来锁住 `to_sql()` 接入 `sqlglot.optimizer.optimize()` 之后最容易漂移的时间 SQL 形态：
+
+| optimizer 影响点 | 典型现象 | DSQL 收口策略 | 对应测试名 |
+| --- | --- | --- | --- |
+| `EXTRACT(...)` 冗余 cast | `EXTRACT(hour FROM CAST(ts AS TIMESTAMP/DATETIME))` | 若原始 AST 中没有这层 cast，则在 optimize 后移除 | `test_extract_hour_of_native_timestamp_column` / `test_extract_hour_of_mutate_timestamp_column` |
+| 聚合后外层透传壳 | `WITH t1 AS (...) SELECT ... FROM t1 ORDER BY ...` | 根查询只是单 CTE 透传时直接内联 | `test_extract_hour_of_mutate_timestamp_column` / `test_extract_hour_of_native_timestamp_column` / `test_truncate_date_of_mutate_timestamp_column` |
+| 时间区间谓词展开 | `x >= low AND x <= high` | 恢复为 `x BETWEEN low AND high`，保持 golden 稳定 | `test_time_between_of_mutate_timestamp_column` / `test_time_between_of_native_timestamp_column` |
+| 时间过滤后的恒等别名 | `SELECT t0.ts AS ts` / `SELECT t0.id AS id` | 去掉恒等别名，保留真正有意义的命名 | `test_to_sql_supports_mutated_epoch_millis_timestamp_filter_and_select` |
+| 周截断过滤包装层 | 同名 `mutate` 后先包子查询再做周范围比较 | 在不改变语义的前提下压回基表级过滤 | `test_to_sql_rewrites_same_name_mutated_epoch_millis_week_range_filter` / `test_truncate_week_of_mutate_timestamp_column` |
+
 ## 6. 当前结论
 
 - 直接比较场景统一落成长毫秒比较，不再生成 `CAST(... AS BIGINT)`。

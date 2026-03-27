@@ -216,12 +216,23 @@ DSQL 不允许在需要单值的位置使用标量子查询，因此以下形态
   - `SELECT ... FROM ... [WHERE ...] START WITH ... CONNECT BY [NOCYCLE] PRIOR ... = ... [ORDER BY ...]`
 - 去掉 `__connect` CTE 及所有 `__connect_*` 保留列，保证最终输出里不泄漏内部协议。
 
-#### 5.5.5 `optimize=True` 策略
+#### 5.5.5 `to_sql()` 优化策略
 
-- `CONNECT BY` 的构造不依赖 `sqlglot.optimizer.optimize()`。
-- 对命中 `CONNECT BY` lowering 的查询，先完成 lowering，再跳过通用 optimizer。
-- 这样可以避免 optimizer 重新解析或重排层次查询结构时破坏 DSQL 语义。
-- 对非 `CONNECT BY` 查询，仍保持现有 `optimize=True` 行为。
+- `to_sql()` 在最终返回 SQL 字符串前，总是执行一次 `sqlglot.optimizer.optimize()`。
+- `compile()` / `to_sqlglot()` 仍然保持显式 `optimize=True` 才返回优化后 AST 的行为；只有字符串出口默认总是优化。
+- 优化阶段直接基于 sqlglot AST 执行，不走“先序列化成 SQL，再重新 parse，再 optimize”的链路。
+- 这样做的原因是：重 parse 会丢失部分 DSQL 侧已经固定下来的信息，例如大小写敏感的标识符表名。
+
+optimizer 带来收益的同时，也会改写出一些对 DSQL 不友好的表面形态，因此 `to_sql()` 在 optimize 后还会执行一层 DSQL 规范化收口，主要包括：
+
+- 去掉 `EXTRACT(...)` 下 optimizer 自动插入、但原始 AST 中并不存在的冗余 `CAST(... AS TIMESTAMP/DATETIME)`。
+- 将 `x >= low AND x <= high` 恢复为 `x BETWEEN low AND high`。
+- 将 optimizer 改写成半连接的 `IN (SELECT ...)` / `NOT IN (SELECT ...)` 恢复回子查询写法。
+- 恢复显式 `INNER JOIN` 关键字，避免输出依赖默认 join 类型。
+- 去掉 `FROM users AS users` 这类自别名，以及 `t0.id AS id` 这类恒等别名。
+- 对仅起透传作用的单层 `WITH ... SELECT ... FROM cte` 包装做内联，减少不必要的额外壳层。
+
+这层规范化不是为了抵消 optimizer，而是为了在保留折叠、谓词下推、常量传播等优化收益的同时，让最终 DSQL 更稳定、可读，也更适合做 SQL golden 测试。
 
 ### 5.6 时间处理总览
 
@@ -311,6 +322,20 @@ DSQL 时间处理当前有两类入口：
 - `EXTRACT(hour FROM ...)`
 
 这样可以保证分组、投影和聚合仍然按真正的时间语义运行。
+
+例 4：为什么 `extract_hour` 在接入 optimizer 后需要额外收口
+
+`EXTRACT(hour FROM ts)` 这类表达式本身语义很简单，但 optimizer 会继续基于通用 SQL 方言规则改写 AST，常见现象有两类：
+
+- 对原生 `timestamp` 列补出冗余的 `CAST(ts AS TIMESTAMP/DATETIME)`，导致最终变成 `EXTRACT(hour FROM CAST(ts AS ...))`
+- 把“分组聚合子查询 + 外层排序”的结构压成 `WITH ... SELECT ... FROM cte ORDER BY ...`，虽然语义等价，但会让 DSQL golden 输出产生不必要的壳层差异
+
+因此 DSQL 在 optimize 后会做两步针对性收口：
+
+- 如果原始 AST 中 `EXTRACT` 的输入本来就不是 cast，则移除 optimizer 额外加上的 timestamp cast
+- 如果根查询只是对单个 CTE 的简单透传，则把这层包装内联掉
+
+这样既保留 optimizer 对聚合、过滤等结构的整理收益，又不会让 `extract_hour`、`year/month/day` 等常见时间提取函数的最终 SQL 形态失控。
 
 ### 5.7 `epoch-ms bigint -> timestamp` 时间语义优化
 
