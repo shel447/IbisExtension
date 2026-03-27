@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date as pydate
 from datetime import datetime as pydatetime
 from decimal import Decimal
+from functools import wraps
 
 import ibis.expr.operations as ops
 import ibis.expr.datatypes as dt
@@ -14,6 +15,10 @@ import sqlglot.expressions as sge
 from ibis_dsql.dialect import DSQLDialect
 from ibis_dsql.exceptions import UnsupportedSyntaxException
 from ibis_dsql.rewrites import DSQL_POST_REWRITES, DSQL_REWRITES
+from ibis_dsql.temporal import EpochMillisTemporalPolicy
+from ibis_dsql.temporal import epoch_millis_source_op
+from ibis_dsql.temporal import is_epoch_millis_timestamp_cast
+from ibis_dsql.temporal import is_temporal_dtype
 
 CONNECT_CTE_NAME = "__connect"
 CONNECT_START_WITH = "__connect_start_with"
@@ -26,76 +31,6 @@ CONNECT_METADATA = {
     CONNECT_CHILD_KEY,
     CONNECT_NOCYCLE,
 }
-TIMEZONE_AWARE_EPOCH_MILLIS_ERROR = (
-    "DSQL does not support timezone-aware timestamp fields in epoch-millis comparisons"
-)
-
-
-def _is_epoch_millis_timestamp_cast(op: ops.Node) -> bool:
-    return (
-        isinstance(op, ops.Cast)
-        and op.arg.dtype.is_integer()
-        and op.to.is_timestamp()
-    )
-
-
-def _epoch_millis_source_op(
-    op: ops.Node, *, _seen: set[ops.Node] | None = None
-) -> ops.Node | None:
-    if _is_epoch_millis_timestamp_cast(op):
-        return op.arg
-
-    if not isinstance(op, ops.Field):
-        return None
-
-    if _seen is None:
-        _seen = set()
-    if op in _seen:
-        return None
-    _seen.add(op)
-
-    values = getattr(op.rel, "values", None)
-    if values is None or op.name not in values:
-        return None
-
-    value = values[op.name]
-    if value is op:
-        return None
-
-    return _epoch_millis_source_op(value, _seen=_seen)
-
-
-def _is_timestamp_datetype(dtype) -> bool:
-    return dtype.is_timestamp()
-
-
-def _is_temporal_dtype(dtype) -> bool:
-    return dtype.is_timestamp() or dtype.is_date()
-
-
-def _timestamp_timezone(dtype) -> str | None:
-    if not dtype.is_timestamp():
-        return None
-    return getattr(dtype, "timezone", None)
-
-
-def _is_timezone_aware_timestamp_dtype(dtype) -> bool:
-    return dtype.is_timestamp() and _timestamp_timezone(dtype) is not None
-
-
-def _is_sql_int_literal(expression: sge.Expression, value: int) -> bool:
-    return (
-        isinstance(expression, sge.Literal)
-        and not expression.is_string
-        and str(expression.this) == str(value)
-    )
-
-
-def _is_anonymous_function(expression: sge.Expression, name: str) -> bool:
-    return (
-        isinstance(expression, sge.Anonymous)
-        and expression.name.upper() == name.upper()
-    )
 
 
 def _raise_on_leaked_derived_fields(op: ops.Node) -> None:
@@ -352,16 +287,34 @@ def _lower_connect_tree(expression: sge.Select) -> sge.Select:
     return expression
 
 
+def _restore_temporal_arg(method):
+    @wraps(method)
+    def wrapped(self, op, *, arg, **kwargs):
+        arg = self.temporal.restore_timestamp(op.arg, arg)
+        return method(self, op, arg=arg, **kwargs)
+
+    return wrapped
+
+
+def _restore_temporal_left(method):
+    @wraps(method)
+    def wrapped(self, op, *, left, right, **kwargs):
+        left = self.temporal.restore_timestamp(op.left, left)
+        return method(self, op, left=left, right=right, **kwargs)
+
+    return wrapped
+
+
 class DSQLCompiler(PostgresCompiler):
-    __slots__ = ()
+    __slots__ = ("temporal",)
 
     dialect = DSQLDialect
     rewrites = (*DSQL_REWRITES, *PostgresCompiler.rewrites)
     post_rewrites = (*DSQL_POST_REWRITES, *PostgresCompiler.post_rewrites)
 
-    def _epoch_millis_to_timestamp(self, arg: sge.Expression, to) -> sge.Expression:
-        seconds = self.binop(sge.Div, arg, sge.convert(1000))
-        return self.cast(sg.func("FROM_UNIXTIME", seconds), to)
+    def __init__(self):
+        super().__init__()
+        self.temporal = EpochMillisTemporalPolicy(self)
 
     @staticmethod
     def _literal_node_value(node: ops.Node):
@@ -417,52 +370,6 @@ class DSQLCompiler(PostgresCompiler):
 
         return second_text
 
-    def _unwrap_epoch_millis_timestamp(self, expression: sge.Expression) -> sge.Expression | None:
-        if not isinstance(expression, sge.Cast):
-            return None
-
-        to = expression.to
-        if not isinstance(to, sge.DataType) or to.this != sge.DataType.Type.TIMESTAMP:
-            return None
-
-        inner = expression.this
-        if not _is_anonymous_function(inner, "FROM_UNIXTIME") or len(inner.expressions) != 1:
-            return None
-
-        division = inner.expressions[0]
-        if not isinstance(division, sge.Div) or not _is_sql_int_literal(division.expression, 1000):
-            return None
-
-        return division.this.copy()
-
-    def _timestamp_to_epoch_millis(self, expression: sge.Expression) -> sge.Expression:
-        raw = self._unwrap_epoch_millis_timestamp(expression)
-        if raw is not None:
-            return raw
-
-        seconds = sg.func("UNIX_TIMESTAMP", expression.copy())
-        return self.binop(sge.Mul, seconds, sge.convert(1000))
-
-    def _operand_to_epoch_millis(
-        self, operand: ops.Node, expression: sge.Expression
-    ) -> sge.Expression:
-        if _epoch_millis_source_op(operand) is not None:
-            raw = self._unwrap_epoch_millis_timestamp(expression)
-            return raw if raw is not None else expression.copy()
-
-        return self._timestamp_to_epoch_millis(expression)
-
-    def _restore_epoch_millis_timestamp(
-        self, operand: ops.Node, expression: sge.Expression
-    ) -> sge.Expression:
-        if _epoch_millis_source_op(operand) is None:
-            return expression
-
-        if self._unwrap_epoch_millis_timestamp(expression) is not None:
-            return expression
-
-        return self._epoch_millis_to_timestamp(expression.copy(), operand.dtype)
-
     @staticmethod
     def _format_temporal_literal(value, *, is_timestamp: bool) -> str:
         timespec = "microseconds" if getattr(value, "microsecond", 0) else "seconds"
@@ -474,42 +381,14 @@ class DSQLCompiler(PostgresCompiler):
     def _string_literal(value: str) -> sge.Literal:
         return sge.Literal.string(value)
 
-    def _rewrite_epoch_millis_projection(self, expression: sge.Expression) -> sge.Expression:
-        if isinstance(expression, sge.Alias):
-            raw = self._unwrap_epoch_millis_timestamp(expression.this)
-            if raw is None:
-                return expression
-
-            rewritten = expression.copy()
-            rewritten.set("this", raw)
-            return rewritten
-
-        raw = self._unwrap_epoch_millis_timestamp(expression)
-        return raw if raw is not None else expression
-
-    def _ensure_supported_epoch_millis_temporal_operands(self, *operands: ops.Node) -> None:
-        if any(_is_timezone_aware_timestamp_dtype(operand.dtype) for operand in operands):
-            raise UnsupportedSyntaxException(TIMEZONE_AWARE_EPOCH_MILLIS_ERROR)
-
-    def _should_rewrite_temporal_comparison(self, left_op: ops.Node, right_op: ops.Node) -> bool:
-        if not (
-            (_epoch_millis_source_op(left_op) is not None or _epoch_millis_source_op(right_op) is not None)
-            and _is_temporal_dtype(left_op.dtype)
-            and _is_temporal_dtype(right_op.dtype)
-        ):
-            return False
-
-        self._ensure_supported_epoch_millis_temporal_operands(left_op, right_op)
-        return True
-
     def _rewrite_temporal_binop(self, op, sg_cls, left, right):
-        if not self._should_rewrite_temporal_comparison(op.left, op.right):
+        if not self.temporal.should_rewrite_temporal_comparison(op.left, op.right):
             return self.binop(sg_cls, left, right)
 
         return self.binop(
             sg_cls,
-            self._operand_to_epoch_millis(op.left, left),
-            self._operand_to_epoch_millis(op.right, right),
+            self.temporal.operand_to_epoch_millis(op.left, left),
+            self.temporal.operand_to_epoch_millis(op.right, right),
         )
 
     def visit_StartsWith(self, op, *, arg, start):
@@ -534,11 +413,11 @@ class DSQLCompiler(PostgresCompiler):
         )
 
     def visit_Cast(self, op, *, arg, to):
-        if _is_epoch_millis_timestamp_cast(op):
-            return self._epoch_millis_to_timestamp(arg, to)
+        if is_epoch_millis_timestamp_cast(op):
+            return self.temporal.build_timestamp(arg, to)
 
         if op.arg.dtype.is_timestamp() and (to.is_date() or to.is_time()):
-            arg = self._restore_epoch_millis_timestamp(op.arg, arg)
+            arg = self.temporal.restore_timestamp(op.arg, arg)
 
         return super().visit_Cast(op, arg=arg, to=to)
 
@@ -609,47 +488,61 @@ class DSQLCompiler(PostgresCompiler):
         )
         return self.cast(timestamp_text, dt.timestamp)
 
+    @_restore_temporal_arg
     def visit_Date(self, op, *, arg):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return self.f.date_trunc("day", arg)
 
+    @_restore_temporal_arg
     def visit_Strftime(self, op, *, arg, format_str):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return super().visit_Strftime(op, arg=arg, format_str=format_str)
 
+    @_restore_temporal_arg
     def visit_ExtractEpochSeconds(self, op, *, arg):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return super().visit_ExtractEpochSeconds(op, arg=arg)
 
+    @_restore_temporal_arg
     def visit_ExtractYear(self, op, *, arg):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return super().visit_ExtractYear(op, arg=arg)
 
+    @_restore_temporal_arg
     def visit_ExtractMonth(self, op, *, arg):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return super().visit_ExtractMonth(op, arg=arg)
 
+    @_restore_temporal_arg
     def visit_ExtractDay(self, op, *, arg):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return super().visit_ExtractDay(op, arg=arg)
 
+    @_restore_temporal_arg
     def visit_ExtractHour(self, op, *, arg):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return super().visit_ExtractHour(op, arg=arg)
 
+    @_restore_temporal_arg
     def visit_ExtractMinute(self, op, *, arg):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return super().visit_ExtractMinute(op, arg=arg)
 
+    @_restore_temporal_arg
     def visit_ExtractSecond(self, op, *, arg):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         return super().visit_ExtractSecond(op, arg=arg)
 
+    @_restore_temporal_arg
     def visit_TimestampTruncate(self, op, *, arg, unit):
-        arg = self._restore_epoch_millis_timestamp(op.arg, arg)
         if unit.short == "W":
             return self._monday_week_start(arg)
         return super().visit_TimestampTruncate(op, arg=arg, unit=unit)
+
+    @_restore_temporal_left
+    def visit_TimestampAdd(self, op, *, left, right):
+        return super().visit_TimestampAdd(op, left=left, right=right)
+
+    @_restore_temporal_left
+    def visit_TimestampSub(self, op, *, left, right):
+        return super().visit_TimestampSub(op, left=left, right=right)
+
+    def visit_SortKey(self, op, *, expr, ascending: bool, nulls_first: bool):
+        expr = self.temporal.restore_timestamp(op.expr, expr)
+        return super().visit_SortKey(
+            op, expr=expr, ascending=ascending, nulls_first=nulls_first
+        )
 
     def visit_Equals(self, op, *, left, right):
         return self._rewrite_temporal_binop(op, sge.EQ, left, right)
@@ -671,25 +564,25 @@ class DSQLCompiler(PostgresCompiler):
 
     def visit_Between(self, op, *, arg, lower_bound, upper_bound):
         if not (
-            _epoch_millis_source_op(op.arg) is not None
-            and _is_temporal_dtype(op.arg.dtype)
-            and _is_temporal_dtype(op.lower_bound.dtype)
-            and _is_temporal_dtype(op.upper_bound.dtype)
+            epoch_millis_source_op(op.arg) is not None
+            and is_temporal_dtype(op.arg.dtype)
+            and is_temporal_dtype(op.lower_bound.dtype)
+            and is_temporal_dtype(op.upper_bound.dtype)
         ):
             return super().visit_Between(
                 op, arg=arg, lower_bound=lower_bound, upper_bound=upper_bound
             )
 
-        self._ensure_supported_epoch_millis_temporal_operands(
+        self.temporal.ensure_supported_temporal_operands(
             op.arg,
             op.lower_bound,
             op.upper_bound,
         )
 
         return sge.Between(
-            this=self._operand_to_epoch_millis(op.arg, arg),
-            low=self._operand_to_epoch_millis(op.lower_bound, lower_bound),
-            high=self._operand_to_epoch_millis(op.upper_bound, upper_bound),
+            this=self.temporal.operand_to_epoch_millis(op.arg, arg),
+            low=self.temporal.operand_to_epoch_millis(op.lower_bound, lower_bound),
+            high=self.temporal.operand_to_epoch_millis(op.upper_bound, upper_bound),
         )
 
     def _star_fields(self, names, relation):
@@ -718,7 +611,7 @@ class DSQLCompiler(PostgresCompiler):
             for select in sql.find_all(sge.Select):
                 select.set(
                     "expressions",
-                    [self._rewrite_epoch_millis_projection(expr) for expr in select.expressions],
+                    [self.temporal.rewrite_projection(expr) for expr in select.expressions],
                 )
 
         return sql

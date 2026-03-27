@@ -11,12 +11,16 @@
 
 - [test_time_handling.py](E:/code/codex_projects/IbisExtension/tests/test_time_handling.py)：原子能力回归
 - [test_custom_time_handling_scene.py](E:/code/codex_projects/IbisExtension/tests/test_custom_time_handling_scene.py)：贴近业务写法的串联场景回归
+- [test_time_handling_extended.py](E:/code/codex_projects/IbisExtension/tests/test_time_handling_extended.py)：补充同名 `mutate` 下的遗漏时间语义路径
+- [test_temporal_policy.py](E:/code/codex_projects/IbisExtension/tests/test_temporal_policy.py)：集中式 temporal policy 的内部契约回归
 
 ## 2. 运行方式
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests.test_time_handling -v
 .\.venv\Scripts\python.exe -m unittest tests.test_custom_time_handling_scene -v
+.\.venv\Scripts\python.exe -m unittest tests.test_time_handling_extended -v
+.\.venv\Scripts\python.exe -m unittest tests.test_temporal_policy -v
 ```
 
 ## 3. 原子能力 SQL Golden 覆盖
@@ -37,6 +41,10 @@
 | 同名 `mutate` 比较 | `mutate(ts=ts.cast("timestamp"))` 后与 `now()/truncate()` 比较，右侧换算毫秒；`truncate("week")` 按周一开周 | `test_to_sql_rewrites_same_name_mutated_epoch_millis_week_range_filter` |
 | 同名 `mutate` 时间变换 | `date()/truncate()/strftime()` 保留时间语义，其中 `date()` 输出 `DATE_TRUNC('DAY', ...)`，`truncate("week")` 按周一开周 | `test_to_sql_supports_same_name_mutated_epoch_millis_temporal_transforms` |
 | 同名 `mutate` 时间提取 | `year/month/day/hour/minute/second` 保留时间语义 | `test_to_sql_supports_same_name_mutated_epoch_millis_common_extracts` |
+| 同名 `mutate` 额外时间提取 | `epoch_seconds()` 保留时间语义 | `test_to_sql_supports_same_name_mutated_epoch_millis_epoch_seconds` |
+| 同名 `mutate` cast 到 `date/time` | `cast("date")` / `cast("time")` 保留时间语义 | `test_to_sql_supports_same_name_mutated_epoch_millis_cast_date_and_time` |
+| 同名 `mutate` 排序 | `order_by(ts.desc())` 明确保留时间语义，不依赖偶然的子查询形态 | `test_to_sql_supports_same_name_mutated_epoch_millis_order_by` |
+| 同名 `mutate` 时间算术 | `+/- INTERVAL` 明确保留时间语义 | `test_to_sql_supports_same_name_mutated_epoch_millis_interval_arithmetic` |
 | 原生 `timestamp` 直接投影 | 直接 `select` 保持原生 SQL | `test_to_sql_leaves_native_timestamp_select_unchanged` |
 | 原生 `timestamp` 排序 | `order_by` 保持原生 SQL | `test_to_sql_leaves_native_timestamp_order_by_unchanged` |
 | 原生 `timestamp` 比较 | 与 timestamp 字面量比较保持原生语义 | `test_to_sql_leaves_native_timestamp_comparison_unchanged` |
@@ -55,6 +63,7 @@
 | `mutate` 后过滤再投影 | 过滤仍走毫秒比较，最终投影仍回原始 long | `test_compile_rewrites_mutated_epoch_millis_timestamp_filter_to_bigint` |
 | 同名 `mutate` 比较 | 通过 `Field -> relation.values[name]` 追溯命中 `epoch-ms` 优化 | `test_compile_rewrites_same_name_mutated_epoch_millis_week_range_filter` |
 | 异常边界 | 带时区 `timestamp` 进入优化路径时直接报错 | `test_compile_rejects_timezone_aware_timestamp_in_epoch_millis_comparison` |
+| temporal policy 契约 | 规范链追溯、tagged unwrap、untagged fallback unwrap 与去重恢复都由同一策略对象负责 | `test_source_op_traces_same_name_mutated_epoch_millis_field` / `test_build_timestamp_tags_raw_expression_for_unwrap` / `test_unwrap_timestamp_falls_back_to_shape_matching_for_untagged_ast` / `test_restore_timestamp_avoids_double_wrapping_tagged_expression` |
 
 ## 5. Custom 场景覆盖
 
@@ -101,6 +110,7 @@
 - 顶层直接投影 `epoch-ms.cast("timestamp")` 时，返回给应用的是原始 long 数值。
 - 一旦进入真正的时间语义上下文，例如 `date/truncate/strftime/extract/interval`，仍然会恢复为 timestamp 表达式再参与计算。
 - 同名 `mutate(ts=ts.cast("timestamp"))` 已单独纳入回归，避免后续修改只覆盖“改名 mutate”而漏掉真实业务写法。
+- `epoch-ms` 规范链识别、timestamp 恢复、毫秒化简、裸投影回写，现已集中到独立的 temporal policy 中，减少了 compiler 内部散落 helper 与 visitor 的重复编码。
 - custom 场景已覆盖从“时间部件构造”到“日期分组/周截断过滤”的常见大模型生成路径，可直接用这份矩阵判断某类场景是否已有回归。
 
 ## 7. 暂未纳入本矩阵
